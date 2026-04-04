@@ -199,8 +199,21 @@ Button.MouseButton1Click:Connect(function()
 
         -- Descargar y ejecutar el script principal
         local ok2, s = pcall(function()
-            return game:HttpGet(SCRIPT_URL)
-        end)
+    return game:HttpGet(SCRIPT_URL)
+end)
+
+print("tamaño:", s and #s or "nil")
+print("inicio:", s and s:sub(1, 50))
+
+if not ok2 or not s or #s < 100 then
+    warn("Error al descargar: " .. tostring(s))
+    return
+end
+
+local ok3, err = pcall(loadstring(s))
+if not ok3 then
+    warn("Error al ejecutar: " .. tostring(err))
+end
 
         if not ok2 or not s or #s < 100 then
             warn("[RATAHUB] Error al descargar el script: " .. tostring(s))
