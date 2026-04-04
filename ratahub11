@@ -191,7 +191,7 @@ Button.MouseButton1Click:Connect(function()
 
         local token = "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"
 local ok, result = pcall(function()
-    return (syn and syn.request or http_request or request)({
+    return (syn and syn.request or http and http.request or http_request or request)({
         Url = "https://api.github.com/repos/eduardoelcrack/RATAHUBB/contents/RATAHUB_fluent.lua",
         Method = "GET",
         Headers = {
