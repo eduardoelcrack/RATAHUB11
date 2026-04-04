@@ -190,14 +190,24 @@ Button.MouseButton1Click:Connect(function()
         print("cargando script...")
 
         local token = "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"
-     local result = (syn and syn.request or request)({
-     Url = "https://api.github.com/repos/eduardoelcrack/RATAHUBB/contents/RATAHUB_fluent.lua",
-      Method = "GET",
-     Headers = {
-        ["Authorization"] = "token " .. token,
-        ["Accept"] = "application/vnd.github.v3.raw"
-    }
-})
+local ok, result = pcall(function()
+    return (syn and syn.request or http_request or request)({
+        Url = "https://api.github.com/repos/eduardoelcrack/RATAHUBB/contents/RATAHUB_fluent.lua",
+        Method = "GET",
+        Headers = {
+            ["Authorization"] = "token " .. token,
+            ["Accept"] = "application/vnd.github.v3.raw"
+        }
+    })
+end)
+
+if not ok or not result or not result.Body then
+    -- fallback: intentar con HttpGet normal
+    local s = game:HttpGet("https://api.github.com/repos/eduardoelcrack/RATAHUBB/contents/RATAHUB_fluent.lua")
+    print("respuesta fallback:", s)
+    return
+end
+
 loadstring(result.Body)()
     else
         Button.Text = "Incorrecto ❌"
