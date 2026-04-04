@@ -151,7 +151,7 @@ local checking = false
 
 -- ⬇️ CAMBIA ESTA URL por la de tu repo privado con el token incluido
 -- Formato: https://raw.githubusercontent.com/USUARIO/REPO/RAMA/ARCHIVO?token=TU_TOKEN
-local SCRIPT_URL = "https://raw.githubusercontent.com/eduardoelcrack/RATAHUBB/main/RATAHUB_fluent.lua"
+local SCRIPT_URL = "https://raw.githubusercontent.com/eduardoelcrack/RATAHUBB/refs/heads/main/RATAHUB?token=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"
 
 Button.MouseButton1Click:Connect(function()
     if checking then return end
