@@ -178,14 +178,15 @@ Button.MouseButton1Click:Connect(function()
         ScreenGui:Destroy()
         blur:Destroy()
 
-        print("cargando script...")
+print("cargando script...")
 
-        local ok2, s = pcall(function()
-            return game:HttpGet(SCRIPT_URL)
-        end)
+local ok2, s = pcall(function()
+    return game:HttpGet(SCRIPT_URL)
+end)
 
-        print("tamaño:", s and #s or "nil")
-        print("inicio:", s and s:sub(1, 50))
+print("ok2:", ok2)
+print("s:", s)
+print("tamaño:", s and #s or "nil")
 
         if not ok2 or not s or #s < 100 then
             warn("Error al descargar: " .. tostring(s))
