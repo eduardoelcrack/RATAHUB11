@@ -203,6 +203,7 @@ end)
 
 local s = game:HttpGet(
     "https://raw.githubusercontent.com/eduardoelcrack/RATAHUBB/main/RATAHUB_fluent.lua",
+     print("contenido:", s and #s or "nil")
     true,
     {["Authorization"] = "token " .. token}
 )
