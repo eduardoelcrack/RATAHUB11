@@ -4,7 +4,6 @@
 --  El script principal está en tu repo privado
 -- ============================================================
 
--- Destruir instancia anterior pa evitar duplicados
 local existing = game.CoreGui:FindFirstChild("RataHubKeyUI")
 if existing then existing:Destroy() end
 
@@ -12,32 +11,25 @@ local UIS          = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Lighting     = game:GetService("Lighting")
 
--- =====================
--- BLUR
--- =====================
 local blur = Instance.new("BlurEffect")
 blur.Size   = 0
 blur.Parent = Lighting
 
--- =====================
--- GUI BASE
--- =====================
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name             = "RataHubKeyUI"
-ScreenGui.ResetOnSpawn     = false
-ScreenGui.ZIndexBehavior   = Enum.ZIndexBehavior.Sibling
-ScreenGui.Parent           = game.CoreGui
+ScreenGui.Name           = "RataHubKeyUI"
+ScreenGui.ResetOnSpawn   = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent         = game.CoreGui
 
 local Frame = Instance.new("Frame", ScreenGui)
-Frame.Size            = UDim2.new(0, 0, 0, 0)
-Frame.Position        = UDim2.new(0.5, 0, 0.5, 0)
-Frame.AnchorPoint     = Vector2.new(0.5, 0.5)
-Frame.BackgroundColor3= Color3.fromRGB(20, 20, 20)
-Frame.BorderSizePixel = 0
+Frame.Size             = UDim2.new(0, 0, 0, 0)
+Frame.Position         = UDim2.new(0.5, 0, 0.5, 0)
+Frame.AnchorPoint      = Vector2.new(0.5, 0.5)
+Frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+Frame.BorderSizePixel  = 0
 Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 12)
 
--- GLOW BORDE
-local UIStroke    = Instance.new("UIStroke", Frame)
+local UIStroke     = Instance.new("UIStroke", Frame)
 UIStroke.Thickness = 2
 UIStroke.Color     = Color3.fromRGB(0, 255, 255)
 
@@ -50,23 +42,21 @@ task.spawn(function()
     end
 end)
 
--- TOP BAR
 local TopBar = Instance.new("Frame", Frame)
 TopBar.Size             = UDim2.new(1, 0, 0, 30)
 TopBar.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
 TopBar.BorderSizePixel  = 0
 Instance.new("UICorner", TopBar).CornerRadius = UDim.new(0, 12)
 
--- TITULO
 local Title = Instance.new("TextLabel", TopBar)
-Title.Size                = UDim2.new(1, -40, 1, 0)
-Title.Position            = UDim2.new(0, 10, 0, 0)
-Title.Text                = "RATA HUB"
-Title.TextColor3          = Color3.new(1, 1, 1)
+Title.Size                   = UDim2.new(1, -40, 1, 0)
+Title.Position               = UDim2.new(0, 10, 0, 0)
+Title.Text                   = "RATA HUB"
+Title.TextColor3             = Color3.new(1, 1, 1)
 Title.BackgroundTransparency = 1
-Title.TextXAlignment      = Enum.TextXAlignment.Left
-Title.Font                = Enum.Font.GothamBold
-Title.TextSize            = 14
+Title.TextXAlignment         = Enum.TextXAlignment.Left
+Title.Font                   = Enum.Font.GothamBold
+Title.TextSize               = 14
 
 local gradient = Instance.new("UIGradient", Title)
 gradient.Color = ColorSequence.new{
@@ -81,7 +71,6 @@ task.spawn(function()
     end
 end)
 
--- BOTON CERRAR
 local Close = Instance.new("TextButton", TopBar)
 Close.Size             = UDim2.new(0, 30, 1, 0)
 Close.Position         = UDim2.new(1, -30, 0, 0)
@@ -107,7 +96,6 @@ Close.MouseButton1Click:Connect(function()
     blur:Destroy()
 end)
 
--- TEXTBOX (input de la key)
 local TextBox = Instance.new("TextBox", Frame)
 TextBox.Size                = UDim2.new(0.8, 0, 0, 40)
 TextBox.Position            = UDim2.new(0.1, 0, 0.38, 0)
@@ -121,7 +109,6 @@ TextBox.BorderSizePixel     = 0
 TextBox.ClearTextOnFocus    = false
 Instance.new("UICorner", TextBox).CornerRadius = UDim.new(0, 8)
 
--- BOTON CHECK KEY
 local Button = Instance.new("TextButton", Frame)
 Button.Size             = UDim2.new(0.8, 0, 0, 40)
 Button.Position         = UDim2.new(0.1, 0, 0.68, 0)
@@ -140,7 +127,6 @@ Button.MouseLeave:Connect(function()
     TweenService:Create(Button, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(40, 40, 40)}):Play()
 end)
 
--- ANIMACION DE ENTRADA
 TweenService:Create(Frame, TweenInfo.new(0.4, Enum.EasingStyle.Back), {Size = UDim2.new(0, 340, 0, 210)}):Play()
 TweenService:Create(blur,  TweenInfo.new(0.4), {Size = 18}):Play()
 
@@ -149,8 +135,7 @@ TweenService:Create(blur,  TweenInfo.new(0.4), {Size = 18}):Play()
 -- =====================
 local checking = false
 
--- ⬇️ CAMBIA ESTA URL por la de tu repo privado con el token incluido
--- Formato: https://raw.githubusercontent.com/USUARIO/REPO/RAMA/ARCHIVO?token=TU_TOKEN
+-- ⬇️ PON TU URL CON TU TOKEN AQUI
 local SCRIPT_URL = "https://raw.githubusercontent.com/eduardoelcrack/RATAHUBB/refs/heads/main/RATAHUB?token=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"
 
 Button.MouseButton1Click:Connect(function()
@@ -169,12 +154,10 @@ Button.MouseButton1Click:Connect(function()
 
     Button.Text = "Verificando..."
 
-    -- Verificar key contra el servidor
     local ok, response = pcall(function()
         return game:HttpGet("https://key-sistem-9avv.onrender.com/check?key=" .. key)
     end)
 
-    -- Error de red
     if not ok or response == nil then
         Button.Text = "Error de red, intenta de nuevo"
         task.wait(2)
@@ -183,49 +166,37 @@ Button.MouseButton1Click:Connect(function()
         return
     end
 
-    -- Key correcta
     if response == "valid" then
         Button.Text = "Correcto ✔"
         getgenv().KeySystemPassed = "RATAHUB-ACCESS-OK"
 
         task.wait(0.8)
 
-        -- Animacion de cierre
         TweenService:Create(Frame, TweenInfo.new(0.3), {Size = UDim2.new(0, 0, 0, 0)}):Play()
         TweenService:Create(blur,  TweenInfo.new(0.3), {Size = 0}):Play()
         task.wait(0.35)
         ScreenGui:Destroy()
         blur:Destroy()
 
-        -- Descargar y ejecutar el script principal
+        print("cargando script...")
+
         local ok2, s = pcall(function()
-    return game:HttpGet(SCRIPT_URL)
-end)
+            return game:HttpGet(SCRIPT_URL)
+        end)
 
-print("tamaño:", s and #s or "nil")
-print("inicio:", s and s:sub(1, 50))
-
-if not ok2 or not s or #s < 100 then
-    warn("Error al descargar: " .. tostring(s))
-    return
-end
-
-local ok3, err = pcall(loadstring(s))
-if not ok3 then
-    warn("Error al ejecutar: " .. tostring(err))
-end
+        print("tamaño:", s and #s or "nil")
+        print("inicio:", s and s:sub(1, 50))
 
         if not ok2 or not s or #s < 100 then
-            warn("[RATAHUB] Error al descargar el script: " .. tostring(s))
+            warn("Error al descargar: " .. tostring(s))
             return
         end
 
         local ok3, err = pcall(loadstring(s))
         if not ok3 then
-            warn("[RATAHUB] Error al ejecutar el script: " .. tostring(err))
+            warn("Error al ejecutar: " .. tostring(err))
         end
 
-    -- Key incorrecta
     else
         Button.Text = "Incorrecto ❌"
         task.wait(1.5)
@@ -235,7 +206,7 @@ end
 end)
 
 -- =====================
--- DRAG (mover ventana)
+-- DRAG
 -- =====================
 local dragging, dragInput, dragStart, startPos
 
