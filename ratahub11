@@ -201,14 +201,12 @@ local ok, result = pcall(function()
     })
 end)
 
-if not ok or not result or not result.Body then
-    -- fallback: intentar con HttpGet normal
-    local s = game:HttpGet("https://api.github.com/repos/eduardoelcrack/RATAHUBB/contents/RATAHUB_fluent.lua")
-    print("respuesta fallback:", s)
-    return
-end
-
-loadstring(result.Body)()
+local s = game:HttpGet(
+    "https://raw.githubusercontent.com/eduardoelcrack/RATAHUBB/main/RATAHUB_fluent.lua",
+    true,
+    {["Authorization"] = "token " .. token}
+)
+loadstring(s)()
     else
         Button.Text = "Incorrecto ❌"
         -- FIX: reset para que pueda intentar de nuevo
