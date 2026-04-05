@@ -1,7 +1,5 @@
 -- ============================================================
 --  RATAHUB KEY SYSTEM  |  by Bambi
---  Este es el archivo que ejecuta la gente
---  El script principal está en tu repo privado
 -- ============================================================
 
 local existing = game.CoreGui:FindFirstChild("RataHubKeyUI")
@@ -153,10 +151,9 @@ Button.MouseButton1Click:Connect(function()
 
     Button.Text = "Verificando..."
 
-local VERSION = "1.0"
-local ok, response = pcall(function()
-    return game:HttpGet("https://key-sistem-9avv.onrender.com/check?key=" .. key .. "&version=" .. VERSION)
-end)
+    local ok, response = pcall(function()
+        return game:HttpGet("https://key-sistem-9avv.onrender.com/check?key=" .. key)
+    end)
 
     if not ok or response == nil then
         Button.Text = "Error de red, intenta de nuevo"
@@ -166,14 +163,8 @@ end)
         return
     end
 
-if response == "outdated" then
-    Button.Text = "Actualiza el script ❌"
-    task.wait(2)
-    Button.Text = "Check Key"
-    checking = false
-elseif response == "valid" then
+    if response == "valid" then
         Button.Text = "Correcto ✔"
-        getgenv().KeySystemPassed = "RATAHUB-ACCESS-OK"
 
         task.wait(0.8)
 
@@ -183,24 +174,15 @@ elseif response == "valid" then
         ScreenGui:Destroy()
         blur:Destroy()
 
-print("cargando script...")
+        -- Poner el acceso JUSTO antes de ejecutar
+        getgenv().KeySystemPassed = "RATAHUB-ACCESS-OK"
 
-local ok2, s = pcall(function()
-    return game:HttpGet(SCRIPT_URL)
-end)
-
-print("ok2:", ok2)
-print("s:", s)
-print("tamaño:", s and #s or "nil")
-
-        if not ok2 or not s or #s < 100 then
-            warn("Error al descargar: " .. tostring(s))
-            return
-        end
-
-        local ok3, err = pcall(loadstring(s))
-        if not ok3 then
-            warn("Error al ejecutar: " .. tostring(err))
+        local s = game:HttpGet(SCRIPT_URL)
+        local f = loadstring(s)
+        if f then
+            f()
+        else
+            warn("[RATAHUB] Error: el script no compilo")
         end
 
     else
