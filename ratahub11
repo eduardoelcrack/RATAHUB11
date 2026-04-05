@@ -135,7 +135,6 @@ TweenService:Create(blur,  TweenInfo.new(0.4), {Size = 18}):Play()
 -- =====================
 local checking = false
 
--- ⬇️ PON TU URL CON TU TOKEN AQUI
 local SCRIPT_URL = "https://raw.githubusercontent.com/eduardoelcrack/RATAHUBB/refs/heads/main/RATAHUB"
 
 Button.MouseButton1Click:Connect(function()
