@@ -154,9 +154,10 @@ Button.MouseButton1Click:Connect(function()
 
     Button.Text = "Verificando..."
 
-    local ok, response = pcall(function()
-        return game:HttpGet("https://key-sistem-9avv.onrender.com/check?key=" .. key)
-    end)
+local VERSION = "1.0"
+local ok, response = pcall(function()
+    return game:HttpGet("https://key-sistem-9avv.onrender.com/check?key=" .. key .. "&version=" .. VERSION)
+end)
 
     if not ok or response == nil then
         Button.Text = "Error de red, intenta de nuevo"
@@ -166,7 +167,12 @@ Button.MouseButton1Click:Connect(function()
         return
     end
 
-    if response == "valid" then
+if response == "outdated" then
+    Button.Text = "Actualiza el script ❌"
+    task.wait(2)
+    Button.Text = "Check Key"
+    checking = false
+elseif response == "valid" then
         Button.Text = "Correcto ✔"
         getgenv().KeySystemPassed = "RATAHUB-ACCESS-OK"
 
