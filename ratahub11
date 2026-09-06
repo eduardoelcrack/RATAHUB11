@@ -1,5 +1,5 @@
 --[[
-	RATAHUB V5 — Premium Roblox Utility GUI Framework hola chat otra ves
+	RATAHUB V5 — Premium Roblox Utility GUI Framework
 	Pass: Dropdown Visibility & Dynamic Anchor Fix, Full ESP (Purple/Red/Friend Green),
 	      Persistent Aimlock Target Architecture, Whitelist/Team/Friend Synchronized Logic.
 
@@ -2149,17 +2149,15 @@ local Config = {
 		Movement = {
 			Fly = false,
 			FlyActive = false,
-			FlySpeed = 50,
-			FlyKeybind = "X",
+			FlyKeybind = "V",
+			FlySpeed = 140,
 			WalkSpeedEnabled = false,
+			WalkSpeedKeybind = "C",
 			WalkSpeed = 16,
-			WalkSpeedKeybind = "Z",
 			JumpPowerEnabled = false,
 			JumpPower = 50,
-			JumpPowerKeybind = "C",
 			GravityEnabled = false,
 			Gravity = 196.2,
-			GravityKeybind = "V",
 			InfiniteJump = false,
 			InfiniteJumpActive = false,
 			InfiniteJumpKeybind = "M",
@@ -2396,55 +2394,9 @@ local function getRoot()
 	return c and c:FindFirstChild("HumanoidRootPart")
 end
 
-------------------------------------------------------------- Movement: Fly
-function Features.StartFly()
-	if Runtime.Fly.loop then return end
-	local root = getRoot()
-	local hum = getHumanoid()
-	if not root or not hum then return end
-
-	local bv = Instance.new("BodyVelocity")
-	bv.Velocity = Vector3.zero
-	bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-	bv.Parent = root
-	Runtime.Fly.bv = bv
-
-	local bg = Instance.new("BodyGyro")
-	bg.CFrame = root.CFrame
-	bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-	bg.P = 9e4
-	bg.Parent = root
-	Runtime.Fly.bg = bg
-
-	hum.PlatformStand = true
-
-	Runtime.Fly.loop = RunService.RenderStepped:Connect(function()
-		if not Runtime.Fly.active or not Config.Main.Movement.Fly then
-			Features.StopFly()
-			return
-		end
-
-		local cam = workspace.CurrentCamera
-		if not cam or not root then return end
-
-		local moveDir = Vector3.zero
-		if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + cam.CFrame.LookVector end
-		if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - cam.CFrame.LookVector end
-		if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - cam.CFrame.RightVector end
-		if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + cam.CFrame.RightVector end
-		if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir = moveDir + Vector3.new(0, 1, 0) end
-		if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir = moveDir - Vector3.new(0, 1, 0) end
-
-		if moveDir.Magnitude > 0 then
-			bv.Velocity = moveDir.Unit * Config.Main.Movement.FlySpeed
-		else
-			bv.Velocity = Vector3.zero
-		end
-		bg.CFrame = cam.CFrame
-	end)
-end
-
+------------------------------------------------------------- Movement: Fly (Restored from RATAHUBB)
 function Features.StopFly()
+	Runtime.Fly.active = false
 	if Runtime.Fly.loop then
 		Runtime.Fly.loop:Disconnect()
 		Runtime.Fly.loop = nil
@@ -2457,31 +2409,75 @@ function Features.StopFly()
 		Runtime.Fly.bg:Destroy()
 		Runtime.Fly.bg = nil
 	end
-	local hum = getHumanoid()
-	if hum then
-		hum.PlatformStand = false
+	local char = player.Character
+	if char then
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum then hum.PlatformStand = false end
+		if Runtime.Fly.animate then
+			Runtime.Fly.animate.Parent = char
+			Runtime.Fly.animate = nil
+		end
 	end
-	Runtime.Fly.active = false
+end
+
+function Features.StartFly()
+	local char = player.Character
+	if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	local root = char.HumanoidRootPart
+	if hum then hum.PlatformStand = true end
+	if char:FindFirstChild("Animate") then
+		Runtime.Fly.animate = char.Animate:Clone()
+		char.Animate:Destroy()
+	end
+	Runtime.Fly.bv = Instance.new("BodyVelocity")
+	Runtime.Fly.bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+	Runtime.Fly.bv.Velocity = Vector3.zero
+	Runtime.Fly.bv.Parent = root
+
+	Runtime.Fly.bg = Instance.new("BodyGyro")
+	Runtime.Fly.bg.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+	Runtime.Fly.bg.P = 20000
+	Runtime.Fly.bg.D = 800
+	Runtime.Fly.bg.Parent = root
+
+	Runtime.Fly.active = true
+	Runtime.Fly.loop = RunService.RenderStepped:Connect(function()
+		if not Runtime.Fly.active or not Config.Main.Movement.Fly then
+			Features.StopFly()
+			return
+		end
+		local cam = workspace.CurrentCamera
+		if not cam then return end
+		local look = cam.CFrame.LookVector
+		local right = look:Cross(Vector3.new(0, 1, 0))
+		local move = Vector3.zero
+		if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + look end
+		if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - look end
+		if UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - right end
+		if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + right end
+		if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move = move + Vector3.new(0, 1, 0) end
+		if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then move = move - Vector3.new(0, 1, 0) end
+		Runtime.Fly.bv.Velocity = move * Config.Main.Movement.FlySpeed
+		Runtime.Fly.bg.CFrame = cam.CFrame
+	end)
 end
 
 function Features.SetFlyMaster(enabled)
 	Config.Main.Movement.Fly = enabled
-	if not enabled then
-		Features.StopFly()
-		RATAHUB:Notify({ Title = "Fly", Content = "Deshabilitado", Duration = 1.2 })
-	else
-		RATAHUB:Notify({
-			Title = "Fly",
-			Content = "Permitido (" .. tostring(Config.Main.Movement.FlyKeybind or "X") .. " para activar)",
-			Duration = 1.2
-		})
-	end
+	Config.Main.Movement.FlyActive = false
+	Features.StopFly()
+	RATAHUB:Notify({
+		Title = "Fly",
+		Content = enabled and ("Permitido (" .. tostring(Config.Main.Movement.FlyKeybind or "V") .. " para activar)") or "Deshabilitado",
+		Duration = 1.2
+	})
 end
 
 function Features.ToggleFlyActive()
 	if not Config.Main.Movement.Fly then return end
-	Runtime.Fly.active = not Runtime.Fly.active
-	if Runtime.Fly.active then
+	Config.Main.Movement.FlyActive = not Config.Main.Movement.FlyActive
+	if Config.Main.Movement.FlyActive then
 		Features.StartFly()
 		RATAHUB:Notify({ Title = "Fly", Content = "Activo", Duration = 1.2 })
 	else
@@ -2490,7 +2486,7 @@ function Features.ToggleFlyActive()
 	end
 end
 
-------------------------------------------------------------- Movement: WalkSpeed
+------------------------------------------------------------- Movement: WalkSpeed (Restored Keybind C)
 function Features.StartWalkSpeed()
 	if Runtime.WalkSpeed.loop then return end
 	Runtime.WalkSpeed.loop = RunService.Heartbeat:Connect(function()
@@ -2529,7 +2525,7 @@ function Features.SetWalkSpeedMaster(enabled)
 		Features.StartWalkSpeed()
 		RATAHUB:Notify({
 			Title = "WalkSpeed",
-			Content = "Permitido (" .. tostring(Config.Main.Movement.WalkSpeedKeybind or "Z") .. " para activar)",
+			Content = "Permitido (" .. tostring(Config.Main.Movement.WalkSpeedKeybind or "C") .. " para activar)",
 			Duration = 1.2
 		})
 	else
@@ -2591,15 +2587,6 @@ function Features.StopJumpPower()
 	end
 end
 
-function Features.SetJumpPowerMaster(enabled)
-	Config.Main.Movement.JumpPowerEnabled = enabled
-	if enabled then
-		Features.StartJumpPower()
-	else
-		Features.StopJumpPower()
-	end
-end
-
 ------------------------------------------------------------- Movement: Gravity
 function Features.StartGravity()
 	if Runtime.Gravity.loop then return end
@@ -2620,15 +2607,6 @@ function Features.StopGravity()
 	workspace.Gravity = 196.2
 end
 
-function Features.SetGravityMaster(enabled)
-	Config.Main.Movement.GravityEnabled = enabled
-	if enabled then
-		Features.StartGravity()
-	else
-		Features.StopGravity()
-	end
-end
-
 ------------------------------------------------------------- Movement: Infinite Jump
 function Features.SetInfiniteJumpMaster(enabled)
 	Config.Main.Movement.InfiniteJump = enabled
@@ -2638,6 +2616,13 @@ function Features.SetInfiniteJumpMaster(enabled)
 			Runtime.InfiniteJump.conn = nil
 		end
 		Runtime.InfiniteJump.active = false
+		RATAHUB:Notify({ Title = "Infinite Jump", Content = "Deshabilitado", Duration = 1.2 })
+	else
+		RATAHUB:Notify({
+			Title = "Infinite Jump",
+			Content = "Permitido (" .. tostring(Config.Main.Movement.InfiniteJumpKeybind or "M") .. " para activar)",
+			Duration = 1.2
+		})
 	end
 end
 
@@ -2668,6 +2653,13 @@ function Features.SetNoclipMaster(enabled)
 	Config.Main.Movement.Noclip = enabled
 	if not enabled then
 		Features.StopNoclip()
+		RATAHUB:Notify({ Title = "No Clip", Content = "Deshabilitado", Duration = 1.2 })
+	else
+		RATAHUB:Notify({
+			Title = "No Clip",
+			Content = "Permitido (" .. tostring(Config.Main.Movement.NoclipKeybind or "N") .. " para activar)",
+			Duration = 1.2
+		})
 	end
 end
 
@@ -2708,36 +2700,66 @@ function Features.ToggleNoclipActive()
 	Runtime.Noclip.active = not Runtime.Noclip.active
 	if Runtime.Noclip.active then
 		Features.StartNoclip()
-		RATAHUB:Notify({ Title = "Noclip", Content = "Activo", Duration = 1.2 })
+		RATAHUB:Notify({ Title = "No Clip", Content = "Activo", Duration = 1.2 })
 	else
 		Features.StopNoclip()
-		RATAHUB:Notify({ Title = "Noclip", Content = "En pausa", Duration = 1.2 })
+		RATAHUB:Notify({ Title = "No Clip", Content = "En pausa", Duration = 1.2 })
 	end
 end
 
-------------------------------------------------------------- Utility: Anti-AFK
+------------------------------------------------------------- Utility: Anti-AFK / Server Hop / Rejoin
 function Features.SetAntiAFK(enabled)
 	Config.Main.Utility.AntiAFK = enabled
-	if enabled then
-		if not Runtime.AntiAFK.conn then
-			Runtime.AntiAFK.conn = player.Idled:Connect(function()
-				if VirtualUser then
-					pcall(function()
-						VirtualUser:CaptureController()
-						VirtualUser:ClickButton2(Vector2.new())
-					end)
-				end
-			end)
-		end
-	else
-		if Runtime.AntiAFK.conn then
-			Runtime.AntiAFK.conn:Disconnect()
-			Runtime.AntiAFK.conn = nil
-		end
+	if enabled and not Runtime.AntiAFK.conn then
+		Runtime.AntiAFK.conn = player.Idled:Connect(function()
+			if VirtualUser then
+				pcall(function()
+					VirtualUser:CaptureController()
+					VirtualUser:ClickButton2(Vector2.zero)
+				end)
+			end
+		end)
+		RATAHUB:Notify({ Title = "Anti-AFK", Content = "Activado", Duration = 1.5 })
+	elseif not enabled and Runtime.AntiAFK.conn then
+		Runtime.AntiAFK.conn:Disconnect()
+		Runtime.AntiAFK.conn = nil
+		RATAHUB:Notify({ Title = "Anti-AFK", Content = "Desactivado", Duration = 1.5 })
 	end
 end
 
-------------------------------------------------------------- Utility: Reset Character
+function Features.ServerHop()
+	local want = Config.Main.Utility.TargetServerPlayers
+	RATAHUB:Notify({ Title = "Server Finder", Content = "Buscando servidor con " .. want .. " jugadores...", Duration = 3 })
+	task.spawn(function()
+		local ok, result = pcall(function()
+			return HttpService:JSONDecode(game:HttpGet(
+				"https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"))
+		end)
+		if ok and result and result.data then
+			for _, s in ipairs(result.data) do
+				if s.playing and s.playing == want and s.id ~= game.JobId then
+					TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, player)
+					return
+				end
+			end
+			for _, s in ipairs(result.data) do
+				if s.playing and s.playing <= want and s.id ~= game.JobId then
+					TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, player)
+					return
+				end
+			end
+			RATAHUB:Notify({ Title = "Server Finder", Content = "No se encontró servidor con esa cantidad", Duration = 3 })
+		else
+			RATAHUB:Notify({ Title = "Error", Content = "Falló la consulta de servidores", Duration = 2 })
+		end
+	end)
+end
+
+function Features.Rejoin()
+	RATAHUB:Notify({ Title = "Rejoin", Content = "Reconectando al mismo servidor...", Duration = 2 })
+	TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player)
+end
+
 function Features.ResetCharacter()
 	local hum = getHumanoid()
 	if hum then
@@ -2745,7 +2767,32 @@ function Features.ResetCharacter()
 	end
 end
 
-------------------------------------------------------------- Player: Reset & Hitbox
+------------------------------------------------------------- Player: Reset & Hitbox (Robust Continuous Loop)
+function Features.RestoreHitbox(plr)
+	if not plr then return end
+	local data = Runtime.Hitbox.origs[plr]
+	if not data then return end
+
+	local char = plr.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if hrp then
+		hrp.Size = data.Size
+		hrp.Transparency = data.Transparency
+		hrp.CanCollide = data.CanCollide
+		if data.Material then hrp.Material = data.Material end
+		if data.Color then hrp.Color = data.Color end
+		hrp:SetAttribute("IsExpandedHitbox", nil)
+	end
+	Runtime.Hitbox.origs[plr] = nil
+end
+
+function Features.RestoreHitboxes()
+	for plr in pairs(Runtime.Hitbox.origs) do
+		Features.RestoreHitbox(plr)
+	end
+	table.clear(Runtime.Hitbox.origs)
+end
+
 function Features.UpdateHitboxes()
 	local isEnabled = Config.Main.Player.HitboxExpander
 	local sizeVal = Config.Main.Player.HitboxSize or 5
@@ -2754,63 +2801,61 @@ function Features.UpdateHitboxes()
 
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p ~= player and p.Character then
-			local root = p.Character:FindFirstChild("HumanoidRootPart")
-			if root then
-				if not Runtime.Hitbox.origs[p] then
-					Runtime.Hitbox.origs[p] = {
-						Size = root.Size,
-						Transparency = root.Transparency,
-						CanCollide = root.CanCollide,
-					}
-				end
-				local orig = Runtime.Hitbox.origs[p]
-				local valid = isEnabled and Features.IsWhitelisted(p, mode, targetSel)
-				local hum = p.Character:FindFirstChildOfClass("Humanoid")
-				if valid and hum and hum.Health > 0 then
-					root.Size = Vector3.new(sizeVal, sizeVal, sizeVal)
-					root.Transparency = 0.65
-					root.CanCollide = false
+			local char = p.Character
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			local root = char:FindFirstChild("HumanoidRootPart")
+			if hum and hum.Health > 0 and root then
+				local shouldExpand = isEnabled and Features.IsWhitelisted(p, mode, targetSel)
+				if shouldExpand then
+					if not Runtime.Hitbox.origs[p] then
+						Runtime.Hitbox.origs[p] = {
+							Size = root.Size,
+							Transparency = root.Transparency,
+							CanCollide = root.CanCollide,
+							Material = root.Material,
+							Color = root.Color,
+						}
+					end
+					local targetSize = Vector3.new(sizeVal, sizeVal, sizeVal)
+					if root.Size ~= targetSize or root.Transparency ~= 0.5 then
+						root.Size = targetSize
+						root.Transparency = 0.5
+						root.Material = Enum.Material.Neon
+						root.Color = Color3.fromRGB(175, 25, 255)
+						root.CanCollide = false
+						root:SetAttribute("IsExpandedHitbox", true)
+					end
 				else
-					root.Size = orig.Size
-					root.Transparency = orig.Transparency
-					root.CanCollide = orig.CanCollide
+					if Runtime.Hitbox.origs[p] then
+						Features.RestoreHitbox(p)
+					end
+				end
+			else
+				if Runtime.Hitbox.origs[p] then
+					Features.RestoreHitbox(p)
 				end
 			end
 		end
 	end
-end
-
-function Features.RestoreHitboxes()
-	for p, orig in pairs(Runtime.Hitbox.origs) do
-		if p and p.Character then
-			local root = p.Character:FindFirstChild("HumanoidRootPart")
-			if root then
-				root.Size = orig.Size
-				root.Transparency = orig.Transparency
-				root.CanCollide = orig.CanCollide
-			end
-		end
-	end
-	table.clear(Runtime.Hitbox.origs)
 end
 
 function Features.ToggleHitboxLoop(enable)
-	if enable then
-		if Runtime.Hitbox.loop then return end
-		Runtime.Hitbox.loop = task.spawn(function()
-			while Config.Main.Player.HitboxExpander do
-				Features.UpdateHitboxes()
-				task.wait(0.1)
-			end
-			Runtime.Hitbox.loop = nil
-		end)
-	else
-		if Runtime.Hitbox.loop then
-			pcall(function() task.cancel(Runtime.Hitbox.loop) end)
-			Runtime.Hitbox.loop = nil
+	if Runtime.Hitbox.loop then
+		pcall(function() task.cancel(Runtime.Hitbox.loop) end)
+		Runtime.Hitbox.loop = nil
+	end
+	if not enable then
+		Features.RestoreHitboxes()
+		return
+	end
+	Runtime.Hitbox.loop = task.spawn(function()
+		while Config.Main.Player.HitboxExpander do
+			Features.UpdateHitboxes()
+			task.wait(0.1)
 		end
 		Features.RestoreHitboxes()
-	end
+		Runtime.Hitbox.loop = nil
+	end)
 end
 
 ------------------------------------------------------------- DESTROY HUB
@@ -3589,7 +3634,7 @@ function Features.SetAntiFling(enabled)
 	end
 end
 
-------------------------------------------------------------- Event-driven Hotkeys Listener
+------------------------------------------------------------- Event-driven Hotkeys Listener (Restored from RATAHUBB)
 function Features.StartHotkeys()
 	if Runtime.Hotkeys.conn then return end
 	Runtime.Hotkeys.conn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -3650,7 +3695,7 @@ local SOUND_LIST = {
 }
 
 --------------------------------------------------------------
--- 1. MAIN TAB
+-- 1. MAIN TAB (Restored from RATAHUBB)
 --------------------------------------------------------------
 do
 	local main = win:CreateTab({ Name = "Main", Icon = "◆", SubTitle = "Movement, player and utility" })
@@ -3674,7 +3719,7 @@ do
 	})
 	Controls.Main.FlySpeed = main:CreateSlider({
 		Name = "Fly Speed",
-		Range = { 10, 300 },
+		Range = { 50, 600 },
 		Increment = 5,
 		CurrentValue = M.Movement.FlySpeed,
 		Callback = function(Value)
@@ -3682,7 +3727,7 @@ do
 		end,
 	})
 
-	Controls.Main.WalkSpeedEnabled = main:CreateToggle({
+	Controls.Main.WalkSpeed = main:CreateToggle({
 		Name = "WalkSpeed",
 		CurrentValue = M.Movement.WalkSpeedEnabled,
 		Callback = function(Value)
@@ -3696,9 +3741,9 @@ do
 			M.Movement.WalkSpeedKeybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
 		end,
 	})
-	Controls.Main.WalkSpeed = main:CreateSlider({
-		Name = "WalkSpeed Value",
-		Range = { 16, 250 },
+	Controls.Main.WalkSpeedValue = main:CreateSlider({
+		Name = "WalkSpeed",
+		Range = { 16, 300 },
 		Increment = 1,
 		CurrentValue = M.Movement.WalkSpeed,
 		Callback = function(Value)
@@ -3706,49 +3751,37 @@ do
 		end,
 	})
 
-	Controls.Main.JumpPowerEnabled = main:CreateToggle({
+	Controls.Main.JumpPower = main:CreateToggle({
 		Name = "JumpPower",
 		CurrentValue = M.Movement.JumpPowerEnabled,
 		Callback = function(Value)
-			Features.SetJumpPowerMaster(Value)
+			M.Movement.JumpPowerEnabled = Value
+			if Value then Features.StartJumpPower() else Features.StopJumpPower() end
 		end,
 	})
-	Controls.Main.JumpPowerKeybind = main:CreateKeybind({
-		Name = "JumpPower Keybind",
-		CurrentKeybind = M.Movement.JumpPowerKeybind,
-		Callback = function(Key)
-			M.Movement.JumpPowerKeybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
-		end,
-	})
-	Controls.Main.JumpPower = main:CreateSlider({
-		Name = "JumpPower Value",
+	Controls.Main.JumpPowerValue = main:CreateSlider({
+		Name = "JumpPower",
 		Range = { 50, 300 },
-		Increment = 5,
+		Increment = 1,
 		CurrentValue = M.Movement.JumpPower,
 		Callback = function(Value)
 			M.Movement.JumpPower = Value
 		end,
 	})
 
-	Controls.Main.GravityEnabled = main:CreateToggle({
+	Controls.Main.Gravity = main:CreateToggle({
 		Name = "Gravity",
 		CurrentValue = M.Movement.GravityEnabled,
 		Callback = function(Value)
-			Features.SetGravityMaster(Value)
+			M.Movement.GravityEnabled = Value
+			if Value then Features.StartGravity() else Features.StopGravity() end
 		end,
 	})
-	Controls.Main.GravityKeybind = main:CreateKeybind({
-		Name = "Gravity Keybind",
-		CurrentKeybind = M.Movement.GravityKeybind,
-		Callback = function(Key)
-			M.Movement.GravityKeybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
-		end,
-	})
-	Controls.Main.Gravity = main:CreateSlider({
-		Name = "Gravity Value",
-		Range = { 0, 196 },
-		Increment = 2,
-		CurrentValue = math.floor(M.Movement.Gravity),
+	Controls.Main.GravityValue = main:CreateSlider({
+		Name = "Gravity",
+		Range = { 0, 196.2 },
+		Increment = 0.1,
+		CurrentValue = M.Movement.Gravity,
 		Callback = function(Value)
 			M.Movement.Gravity = Value
 		end,
@@ -3770,14 +3803,14 @@ do
 	})
 
 	Controls.Main.Noclip = main:CreateToggle({
-		Name = "Noclip",
+		Name = "No Clip",
 		CurrentValue = M.Movement.Noclip,
 		Callback = function(Value)
 			Features.SetNoclipMaster(Value)
 		end,
 	})
 	Controls.Main.NoclipKeybind = main:CreateKeybind({
-		Name = "Noclip Keybind",
+		Name = "No Clip Keybind",
 		CurrentKeybind = M.Movement.NoclipKeybind,
 		Callback = function(Key)
 			M.Movement.NoclipKeybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
@@ -3785,9 +3818,8 @@ do
 	})
 
 	main:CreateSection("Player")
-	main:CreateButton({
-		Name = "Reset Character",
-		Destructive = true,
+	Controls.Main.Reset = main:CreateButton({
+		Name = "Reset Personaje (Desbuguear / Respawn)",
 		Callback = function()
 			Features.ResetCharacter()
 		end,
@@ -3845,11 +3877,23 @@ do
 			M.Utility.TargetServerPlayers = Value
 		end,
 	})
+	Controls.Main.JoinServer = main:CreateButton({
+		Name = "Unirse a Servidor con esa Cantidad",
+		Callback = function()
+			Features.ServerHop()
+		end,
+	})
 	Controls.Main.AntiAFK = main:CreateToggle({
 		Name = "Anti-AFK",
 		CurrentValue = M.Utility.AntiAFK,
 		Callback = function(Value)
 			Features.SetAntiAFK(Value)
+		end,
+	})
+	Controls.Main.Rejoin = main:CreateButton({
+		Name = "Rejoin Same Server (Mismo Servidor)",
+		Callback = function()
+			Features.Rejoin()
 		end,
 	})
 end
@@ -3863,7 +3907,7 @@ do
 
 	esp:CreateSection("General")
 	Controls.ESP.Highlight = esp:CreateToggle({
-		Name = "Highlight",
+		Name = "ESP Highlight",
 		CurrentValue = E.Highlight,
 		Callback = function(Value)
 			E.Highlight = Value
@@ -3871,7 +3915,7 @@ do
 		end,
 	})
 	Controls.ESP.Names = esp:CreateToggle({
-		Name = "Names",
+		Name = "ESP Nombres",
 		CurrentValue = E.Names,
 		Callback = function(Value)
 			E.Names = Value
@@ -3879,7 +3923,7 @@ do
 		end,
 	})
 	Controls.ESP.Details = esp:CreateToggle({
-		Name = "Details (HP & Distancia)",
+		Name = "ESP Nombre + Studs + Vida",
 		CurrentValue = E.Details,
 		Callback = function(Value)
 			E.Details = Value
@@ -3887,7 +3931,7 @@ do
 		end,
 	})
 	Controls.ESP.OffsetX = esp:CreateSlider({
-		Name = "Offset X",
+		Name = "Posicion Offset X (Lados)",
 		Range = { -10, 10 },
 		Increment = 0.5,
 		CurrentValue = E.OffsetX,
@@ -3897,7 +3941,7 @@ do
 		end,
 	})
 	Controls.ESP.OffsetY = esp:CreateSlider({
-		Name = "Offset Y",
+		Name = "Posicion Offset Y (Altura)",
 		Range = { -10, 10 },
 		Increment = 0.5,
 		CurrentValue = E.OffsetY,
@@ -3907,8 +3951,8 @@ do
 		end,
 	})
 	Controls.ESP.TextSize = esp:CreateSlider({
-		Name = "Text Size",
-		Range = { 8, 24 },
+		Name = "Tamaño de Texto ESP",
+		Range = { 8, 32 },
 		Increment = 1,
 		CurrentValue = E.TextSize,
 		Callback = function(Value)
@@ -4031,7 +4075,7 @@ do
 end
 
 --------------------------------------------------------------
--- 3. AIMLOCK TAB
+-- 3. AIMLOCK TAB (Restored from RATAHUBB)
 --------------------------------------------------------------
 do
 	local aim = win:CreateTab({ Name = "Aimlock", Icon = "🎯", SubTitle = "Targeting and aim assistance" })
@@ -4055,7 +4099,7 @@ do
 	})
 	Controls.Aimlock.Smoothness = aim:CreateSlider({
 		Name = "Smoothness",
-		Range = { 0, 95 },
+		Range = { 0, 100 },
 		Increment = 1,
 		CurrentValue = A.Smoothness,
 		Callback = function(Value)
@@ -4063,7 +4107,7 @@ do
 		end,
 	})
 	Controls.Aimlock.Prediction = aim:CreateToggle({
-		Name = "Prediction",
+		Name = "Prediction Aimlock",
 		CurrentValue = A.Prediction,
 		Callback = function(Value)
 			A.Prediction = Value
@@ -4071,28 +4115,35 @@ do
 	})
 	Controls.Aimlock.PredictionTime = aim:CreateSlider({
 		Name = "Prediction Time",
-		Range = { 0.05, 0.5 },
+		Range = { 0, 1 },
 		Increment = 0.01,
 		CurrentValue = A.PredictionTime,
 		Callback = function(Value)
 			A.PredictionTime = Value
 		end,
 	})
-
-	aim:CreateSection("Targeting")
 	Controls.Aimlock.TeamCheck = aim:CreateToggle({
-		Name = "Team Check",
+		Name = "Team Check (No lockear equipo)",
 		CurrentValue = A.TeamCheck,
 		Callback = function(Value)
 			A.TeamCheck = Value
 		end,
 	})
+
+	aim:CreateSection("Target")
 	Controls.Aimlock.AimPart = aim:CreateDropdown({
 		Name = "Aim Part",
-		Options = { "Head", "HumanoidRootPart", "Torso", "Auto" },
+		Options = { "Head", "Torso", "Auto" },
 		CurrentOption = A.AimPart,
 		Callback = function(Value)
 			A.AimPart = Value
+		end,
+	})
+	Controls.Aimlock.FriendCheck = aim:CreateToggle({
+		Name = "Friend Check (No lockear amigos)",
+		CurrentValue = A.FriendCheck,
+		Callback = function(Value)
+			A.FriendCheck = Value
 		end,
 	})
 	Controls.Aimlock.UseMaxDistance = aim:CreateToggle({
@@ -4191,13 +4242,6 @@ do
 		Callback = function(Value)
 			A.IgnoreTeams = Value
 			Features.SyncManager.SyncProperty("Aimlock", "IgnoreTeams", Value)
-		end,
-	})
-	Controls.Aimlock.FriendCheck = aim:CreateToggle({
-		Name = "Friend Check (Ignorar Amigos)",
-		CurrentValue = A.FriendCheck,
-		Callback = function(Value)
-			A.FriendCheck = Value
 		end,
 	})
 end
@@ -4411,6 +4455,7 @@ do
 		Name = "Anti-Fling",
 		CurrentValue = E.Performance.AntiFling,
 		Callback = function(Value)
+			E.Performance.AntiFling = Value
 			Features.SetAntiFling(Value)
 		end,
 	})
@@ -4526,24 +4571,26 @@ end
 --=====================================================================
 -- PLAYER & TEAM DYNAMIC CONNECTIONS
 --=====================================================================
+local function refreshAllPlayerDropdowns()
+	local list = getPlayerList()
+	WHITELIST_TARGETS = list
+	if Controls.Main and Controls.Main.HitboxTarget then Controls.Main.HitboxTarget:Refresh(list, false) end
+	if Controls.ESP and Controls.ESP.WhitelistTarget then Controls.ESP.WhitelistTarget:Refresh(list, false) end
+	if Controls.Aimlock and Controls.Aimlock.WhitelistTarget then Controls.Aimlock.WhitelistTarget:Refresh(list, false) end
+	if Controls.Triggerbot and Controls.Triggerbot.WhitelistTarget then Controls.Triggerbot.WhitelistTarget:Refresh(list, false) end
+end
+
 Players.PlayerAdded:Connect(function(newPlayer)
 	task.wait(0.5)
-	local updatedPlayers = getPlayerList()
-	WHITELIST_TARGETS = updatedPlayers
-	if Controls.Main and Controls.Main.HitboxTarget then Controls.Main.HitboxTarget:Refresh(updatedPlayers) end
-	if Controls.ESP and Controls.ESP.WhitelistTarget then Controls.ESP.WhitelistTarget:Refresh(updatedPlayers) end
-	if Controls.Aimlock and Controls.Aimlock.WhitelistTarget then Controls.Aimlock.WhitelistTarget:Refresh(updatedPlayers) end
-	if Controls.Triggerbot and Controls.Triggerbot.WhitelistTarget then Controls.Triggerbot.WhitelistTarget:Refresh(updatedPlayers) end
+	refreshAllPlayerDropdowns()
 end)
 
 Players.PlayerRemoving:Connect(function(leftPlayer)
 	task.wait(0.2)
-	local updatedPlayers = getPlayerList()
-	WHITELIST_TARGETS = updatedPlayers
-	if Controls.Main and Controls.Main.HitboxTarget then Controls.Main.HitboxTarget:Refresh(updatedPlayers) end
-	if Controls.ESP and Controls.ESP.WhitelistTarget then Controls.ESP.WhitelistTarget:Refresh(updatedPlayers) end
-	if Controls.Aimlock and Controls.Aimlock.WhitelistTarget then Controls.Aimlock.WhitelistTarget:Refresh(updatedPlayers) end
-	if Controls.Triggerbot and Controls.Triggerbot.WhitelistTarget then Controls.Triggerbot.WhitelistTarget:Refresh(updatedPlayers) end
+	if Config.Main.Player.HitboxTarget == leftPlayer.Name then Config.Main.Player.HitboxTarget = "Nadie" end
+	if Config.ESP.WhitelistTarget == leftPlayer.Name then Config.ESP.WhitelistTarget = "Nadie" end
+	if Config.Aimlock.WhitelistTarget == leftPlayer.Name then Config.Aimlock.WhitelistTarget = "Nadie" end
+	if Config.Triggerbot.WhitelistTarget == leftPlayer.Name then Config.Triggerbot.WhitelistTarget = "Nadie" end
 
 	if Runtime.Aimlock.currentTarget == leftPlayer then
 		Features.UnlockAimlock("left", leftPlayer.Name)
@@ -4556,8 +4603,10 @@ Players.PlayerRemoving:Connect(function(leftPlayer)
 		Runtime.ESP.objects[leftPlayer] = nil
 	end
 	if Runtime.Hitbox.origs[leftPlayer] then
-		Runtime.Hitbox.origs[leftPlayer] = nil
+		Features.RestoreHitbox(leftPlayer)
 	end
+
+	refreshAllPlayerDropdowns()
 end)
 
 -- Initialize event hotkeys listener
