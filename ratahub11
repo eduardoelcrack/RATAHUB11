@@ -1,6 +1,7 @@
 --[[
 	RATAHUB V5 — Premium Roblox Utility GUI Framework
-	Pass: 3-State Master Toggles & Keybind Isolation, Floating Dropdown Anchor & ESP / Aimlock Implementation
+	Pass: Dropdown Visibility & Dynamic Anchor Fix, Full ESP (Purple/Red/Friend Green),
+	      Persistent Aimlock Target Architecture, Whitelist/Team/Friend Synchronized Logic.
 
 	Public API (per window / tab):
 	    RATAHUB:CreateWindow({ Title, SubTitle, Version })
@@ -33,7 +34,6 @@ local Lighting = game:GetService("Lighting")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
-local camera = workspace.CurrentCamera
 
 --=====================================================================
 -- THEME (PRESERVED)
@@ -209,7 +209,7 @@ function RATAHUB:Notify(cfg)
 		BackgroundTransparency = 0,
 		BorderSizePixel = 0,
 		Position = UDim2.fromOffset(40, 0),
-		ZIndex = 51,
+		ZIndex = 95,
 		Parent = notifRoot,
 	})
 	corner(12, card)
@@ -228,7 +228,7 @@ function RATAHUB:Notify(cfg)
 		TextColor3 = THEME.Foreground,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Font = FONT_BOLD, TextSize = 14,
-		ZIndex = 52,
+		ZIndex = 96,
 		Parent = card,
 	})
 	create("TextLabel", {
@@ -241,7 +241,7 @@ function RATAHUB:Notify(cfg)
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextWrapped = true,
 		Font = FONT, TextSize = 12,
-		ZIndex = 52,
+		ZIndex = 96,
 		Parent = card,
 	})
 
@@ -263,7 +263,7 @@ function RATAHUB:Notify(cfg)
 end
 
 --=====================================================================
--- WINDOW (TOPBAR + SIDEBAR + CONTENT + FOOTER + DROPDOWN OVERLAY)
+-- WINDOW
 --=====================================================================
 local Window = {}
 Window.__index = Window
@@ -693,7 +693,7 @@ function RATAHUB:CreateWindow(cfg)
 	})
 
 	--------------------------------------------------------------
-	-- DEDICATED DROPDOWN OVERLAY LAYER (Renders above all cards)
+	-- DEDICATED DROPDOWN OVERLAY LAYER (Floating Above All Cards)
 	--------------------------------------------------------------
 	local dropdownOverlay = create("Frame", {
 		Name = "DropdownOverlay",
@@ -1401,6 +1401,7 @@ function Tab:CreateDropdown(cfg)
 	local handle = {}
 	local open = false
 	local scrollConn = nil
+	local setOpen
 
 	local function updatePopupGeometry()
 		if not open then return end
@@ -1408,7 +1409,6 @@ function Tab:CreateDropdown(cfg)
 		local winPos = windowInstance.gui.AbsolutePosition
 		local scrollFrame = windowInstance._scroll
 
-		-- Si el control hace scroll fuera de los límites del contenedor, cerrar automáticamente
 		local sPos = scrollFrame.AbsolutePosition
 		local sSize = scrollFrame.AbsoluteSize
 		if btnPos.Y < sPos.Y - 20 or btnPos.Y > (sPos.Y + sSize.Y) then
@@ -1422,7 +1422,7 @@ function Tab:CreateDropdown(cfg)
 		list.Size = UDim2.fromOffset(btn.AbsoluteSize.X, listHeight)
 	end
 
-	function setOpen(v)
+	setOpen = function(v)
 		if v == open then return end
 		open = v
 		if open then
@@ -2028,7 +2028,7 @@ function RATAHUBAdapter:Notify(cfg)
 end
 
 --=====================================================================
--- CONFIG / CENTRAL STATE (Master Toggles + Keybinds + ESP + Aimlock)
+-- CONFIG / CENTRAL STATE
 --=====================================================================
 local DEFAULT_GRAVITY = 196.2
 local DEFAULT_FOV     = 70
@@ -2075,7 +2075,7 @@ local Config = {
 		Tracers = false,
 		TracerOrigin = "Bottom",
 		TeamColorTracers = false,
-		WhitelistMode = false,
+		WhitelistMode = "Disabled",
 		WhitelistTarget = "Nadie",
 		SyncAimlock = false,
 		SyncTriggerbot = false,
@@ -2083,6 +2083,7 @@ local Config = {
 		TeamColorHighlight = false,
 		RainbowESP = false,
 		IgnoreTeams = "Ninguno",
+		FriendCheck = false,
 	},
 	Aimlock = {
 		Enabled = false,
@@ -2098,11 +2099,12 @@ local Config = {
 		FOVSize = 120,
 		EnemyTracers = false,
 		TracerOrigin = "Mouse",
-		WhitelistMode = false,
+		WhitelistMode = "Disabled",
 		WhitelistTarget = "Nadie",
 		SyncESP = false,
 		SyncTriggerbot = false,
 		IgnoreTeams = "Ninguno",
+		FriendCheck = true,
 	},
 	Triggerbot = {},
 	Extras = {
@@ -2160,18 +2162,23 @@ local Runtime = {
 	Tools        = { btoolsList = {} },
 	Performance  = { antiFlingConn = nil, savedLighting = nil, savedParticles = {} },
 	Hotkeys      = { conn = nil },
-	ESP          = { loop = nil, container = nil, objects = {}, playerConns = {} },
-	Aimlock      = { loop = nil, fovCircle = nil, currentTarget = nil, locked = false },
+	ESP          = { loop = nil, container = nil, objects = {} },
+	Aimlock      = { loop = nil, currentTarget = nil, locked = false, tracer = nil },
+	FriendsCache = {},
 }
 
 --=====================================================================
--- COLOR MAPPING HELPERS
+-- COLOR PALETTE CONSTANTS
 --=====================================================================
+local ESP_PURPLE = Color3.fromRGB(168, 85, 247)
+local ESP_RED    = Color3.fromRGB(239, 68, 68)
+local ESP_GREEN  = Color3.fromRGB(34, 197, 94)
+
 local COLOR_MAP = {
-	["Morado"]     = Color3.fromRGB(168, 85, 247),
-	["Rojo"]       = Color3.fromRGB(239, 68, 68),
+	["Morado"]     = ESP_PURPLE,
+	["Rojo"]       = ESP_RED,
 	["Azul"]       = Color3.fromRGB(59, 130, 246),
-	["Verde Neon"] = Color3.fromRGB(34, 197, 94),
+	["Verde Neon"] = ESP_GREEN,
 	["Cyan"]       = Color3.fromRGB(6, 182, 212),
 	["Blanco"]     = Color3.fromRGB(255, 255, 255),
 }
@@ -2189,6 +2196,19 @@ end
 local function getRoot()
 	local c = player.Character
 	return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+function Features.IsFriend(p)
+	if p == player then return false end
+	if Runtime.FriendsCache[p.UserId] ~= nil then
+		return Runtime.FriendsCache[p.UserId]
+	end
+	local ok, isFr = pcall(function()
+		return player:IsFriendsWith(p.UserId)
+	end)
+	local res = ok and isFr or false
+	Runtime.FriendsCache[p.UserId] = res
+	return res
 end
 
 ------------------------------------------------------------- Movement: Fly
@@ -2495,24 +2515,34 @@ end
 ------------------------------------------------------------- ESP MODULE
 function Features.GetESPColor(targetPlayer)
 	local espCfg = Config.ESP
+	if espCfg.FriendCheck and Features.IsFriend(targetPlayer) then
+		return ESP_GREEN
+	end
 	if espCfg.RainbowESP then
 		return Color3.fromHSV((tick() % 5) / 5, 1, 1)
 	end
 	if espCfg.TeamColorHighlight and targetPlayer.TeamColor then
 		return targetPlayer.TeamColor.Color
 	end
-	return COLOR_MAP[espCfg.HighlightColor] or THEME.Primary
+	return COLOR_MAP[espCfg.HighlightColor] or ESP_PURPLE
 end
 
 function Features.IsPlayerValidESP(targetPlayer)
 	if targetPlayer == player then return false end
 	local espCfg = Config.ESP
-	if espCfg.WhitelistMode and espCfg.WhitelistTarget ~= "Nadie" then
+
+	-- Whitelist Filtering
+	if espCfg.WhitelistMode == "Only Whitelist" then
 		if targetPlayer.Name ~= espCfg.WhitelistTarget then return false end
+	elseif espCfg.WhitelistMode == "Ignore Whitelist" then
+		if targetPlayer.Name == espCfg.WhitelistTarget then return false end
 	end
+
+	-- Team Check Filtering
 	if espCfg.IgnoreTeams ~= "Ninguno" and targetPlayer.Team then
 		if targetPlayer.Team.Name == espCfg.IgnoreTeams then return false end
 	end
+
 	return true
 end
 
@@ -2556,6 +2586,7 @@ function Features.UpdateESP()
 						Runtime.ESP.objects[p] = entry
 					end
 
+					local isFriend = Features.IsFriend(p)
 					local color = Features.GetESPColor(p)
 
 					-- 1. Highlight
@@ -2616,7 +2647,7 @@ function Features.UpdateESP()
 						entry.Billboard.Enabled = false
 					end
 
-					-- 3. Tracers (Line via 2D Frame)
+					-- 3. Tracers
 					if espCfg.Tracers and valid and hum and hum.Health > 0 and root then
 						local screenPos, onScreen = cam:WorldToViewportPoint(root.Position)
 						if onScreen then
@@ -2647,7 +2678,14 @@ function Features.UpdateESP()
 							entry.Tracer.Size = UDim2.fromOffset(dist, 1.5)
 							entry.Tracer.Position = UDim2.fromOffset(center.X, center.Y)
 							entry.Tracer.Rotation = math.deg(angle)
-							entry.Tracer.BackgroundColor3 = (espCfg.TeamColorTracers and p.TeamColor) and p.TeamColor.Color or color
+
+							if isFriend and espCfg.FriendCheck then
+								entry.Tracer.BackgroundColor3 = ESP_GREEN
+							elseif espCfg.TeamColorTracers and p.TeamColor then
+								entry.Tracer.BackgroundColor3 = p.TeamColor.Color
+							else
+								entry.Tracer.BackgroundColor3 = ESP_RED
+							end
 							entry.Tracer.Visible = true
 						elseif entry.Tracer then
 							entry.Tracer.Visible = false
@@ -2661,37 +2699,47 @@ function Features.UpdateESP()
 	end
 end
 
-------------------------------------------------------------- AIMLOCK MODULE
-function Features.GetAimlockTarget()
+------------------------------------------------------------- AIMLOCK MODULE (Persistent Target System)
+function Features.FindBestAimlockTarget()
 	local aimCfg = Config.Aimlock
 	local cam = workspace.CurrentCamera
 	if not cam then return nil end
 
-	local bestTarget = nil
-	local shortestDist = math.huge
+	local bestTargetPlayer = nil
+	local shortestScreenDist = math.huge
 	local mousePos = UserInputService:GetMouseLocation()
 
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p ~= player and p.Character then
 			local char = p.Character
 			local hum = char:FindFirstChildOfClass("Humanoid")
-			local part = char:FindFirstChild(aimCfg.AimPart == "Auto" and "Head" or aimCfg.AimPart) or char:FindFirstChild("HumanoidRootPart")
+			local root = char:FindFirstChild("HumanoidRootPart")
+			local part = char:FindFirstChild(aimCfg.AimPart == "Auto" and "Head" or aimCfg.AimPart) or root
 
-			if hum and hum.Health > 0 and part then
+			if hum and hum.Health > 0 and part and root then
 				local isValid = true
 
-				if aimCfg.WhitelistMode and aimCfg.WhitelistTarget ~= "Nadie" then
-					if p.Name ~= aimCfg.WhitelistTarget then isValid = false end
-				end
-
-				if aimCfg.TeamCheck and p.Team and player.Team and p.Team == player.Team then
+				-- Friend Check
+				if aimCfg.FriendCheck and Features.IsFriend(p) then
 					isValid = false
 				end
 
+				-- Whitelist
+				if aimCfg.WhitelistMode == "Only Whitelist" then
+					if p.Name ~= aimCfg.WhitelistTarget then isValid = false end
+				elseif aimCfg.WhitelistMode == "Ignore Whitelist" then
+					if p.Name == aimCfg.WhitelistTarget then isValid = false end
+				end
+
+				-- Team Check
+				if aimCfg.TeamCheck and p.Team and player.Team and p.Team == player.Team then
+					isValid = false
+				end
 				if aimCfg.IgnoreTeams ~= "Ninguno" and p.Team and p.Team.Name == aimCfg.IgnoreTeams then
 					isValid = false
 				end
 
+				-- Max Distance Filter
 				local worldDist = (cam.CFrame.Position - part.Position).Magnitude
 				if aimCfg.UseMaxDistance and worldDist > aimCfg.MaxDistance then
 					isValid = false
@@ -2701,16 +2749,49 @@ function Features.GetAimlockTarget()
 					local screenPos, onScreen = cam:WorldToViewportPoint(part.Position)
 					if onScreen then
 						local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-						if (not aimCfg.UseFOV or screenDist <= aimCfg.FOVSize) and screenDist < shortestDist then
-							shortestDist = screenDist
-							bestTarget = part
+						if (not aimCfg.UseFOV or screenDist <= aimCfg.FOVSize) and screenDist < shortestScreenDist then
+							shortestScreenDist = screenDist
+							bestTargetPlayer = p
 						end
 					end
 				end
 			end
 		end
 	end
-	return bestTarget
+	return bestTargetPlayer
+end
+
+function Features.UnlockAimlock(reason, targetName)
+	Runtime.Aimlock.locked = false
+	Runtime.Aimlock.currentTarget = nil
+
+	if Runtime.Aimlock.tracer then
+		Runtime.Aimlock.tracer.Visible = false
+	end
+
+	if reason == "died" and targetName then
+		RATAHUB:Notify({ Title = "Aimlock", Content = targetName .. " se murió", Duration = 1.5 })
+	elseif reason == "left" and targetName then
+		RATAHUB:Notify({ Title = "Aimlock", Content = targetName .. " se salió/desapareció", Duration = 1.5 })
+	end
+end
+
+function Features.ToggleAimlockLock()
+	if not Config.Aimlock.Enabled then return end
+
+	if Runtime.Aimlock.locked then
+		Features.UnlockAimlock()
+		RATAHUB:Notify({ Title = "Aimlock", Content = "Desbloqueado", Duration = 1.2 })
+	else
+		local candidate = Features.FindBestAimlockTarget()
+		if candidate then
+			Runtime.Aimlock.currentTarget = candidate
+			Runtime.Aimlock.locked = true
+			RATAHUB:Notify({ Title = "Aimlock", Content = "Lockeaste a " .. candidate.Name, Duration = 1.5 })
+		else
+			RATAHUB:Notify({ Title = "Aimlock", Content = "No hay nadie para lockear", Duration = 1.5 })
+		end
+	end
 end
 
 function Features.UpdateAimlock()
@@ -2720,28 +2801,95 @@ function Features.UpdateAimlock()
 			Runtime.Aimlock.loop:Disconnect()
 			Runtime.Aimlock.loop = nil
 		end
-		Runtime.Aimlock.locked = false
-		Runtime.Aimlock.currentTarget = nil
+		Features.UnlockAimlock()
 		return
 	end
 
 	if not Runtime.Aimlock.loop then
 		Runtime.Aimlock.loop = RunService.RenderStepped:Connect(function()
-			if not Config.Aimlock.Enabled or not Runtime.Aimlock.locked then return end
-			local targetPart = Features.GetAimlockTarget()
-			if targetPart then
-				local cam = workspace.CurrentCamera
-				if not cam then return end
+			if not Config.Aimlock.Enabled or not Runtime.Aimlock.locked or not Runtime.Aimlock.currentTarget then
+				if Runtime.Aimlock.tracer then Runtime.Aimlock.tracer.Visible = false end
+				return
+			end
 
-				local targetPos = targetPart.Position
-				if Config.Aimlock.Prediction and targetPart.Parent and targetPart.Parent:FindFirstChild("HumanoidRootPart") then
-					local vel = targetPart.Parent.HumanoidRootPart.AssemblyLinearVelocity
-					targetPos = targetPos + (vel * Config.Aimlock.PredictionTime)
+			local targetPlayer = Runtime.Aimlock.currentTarget
+			local targetName = targetPlayer.Name
+
+			-- Check if target is still in the game
+			if not targetPlayer.Parent then
+				Features.UnlockAimlock("left", targetName)
+				return
+			end
+
+			local char = targetPlayer.Character
+			if not char then
+				Features.UnlockAimlock("left", targetName)
+				return
+			end
+
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			local root = char:FindFirstChild("HumanoidRootPart")
+			local part = char:FindFirstChild(Config.Aimlock.AimPart == "Auto" and "Head" or Config.Aimlock.AimPart) or root
+
+			if not hum or hum.Health <= 0 then
+				Features.UnlockAimlock("died", targetName)
+				return
+			end
+
+			if not part then
+				Features.UnlockAimlock("left", targetName)
+				return
+			end
+
+			local cam = workspace.CurrentCamera
+			if not cam then return end
+
+			-- Prediction
+			local targetPos = part.Position
+			if Config.Aimlock.Prediction and root then
+				local vel = root.AssemblyLinearVelocity
+				targetPos = targetPos + (vel * Config.Aimlock.PredictionTime)
+			end
+
+			local targetCF = CFrame.new(cam.CFrame.Position, targetPos)
+			local smooth = math.clamp(1 - (Config.Aimlock.Smoothness / 100), 0.05, 1)
+			cam.CFrame = cam.CFrame:Lerp(targetCF, smooth)
+
+			-- Aimlock Tracer
+			if Config.Aimlock.EnemyTracers and root then
+				local screenPos, onScreen = cam:WorldToViewportPoint(root.Position)
+				if onScreen then
+					if not Runtime.Aimlock.tracer then
+						Runtime.Aimlock.tracer = Instance.new("Frame")
+						Runtime.Aimlock.tracer.AnchorPoint = Vector2.new(0.5, 0.5)
+						Runtime.Aimlock.tracer.BorderSizePixel = 0
+						Runtime.Aimlock.tracer.ZIndex = 45
+						Runtime.Aimlock.tracer.Parent = screenGui
+					end
+
+					local fromPos
+					if Config.Aimlock.TracerOrigin == "Mouse" then
+						local m = UserInputService:GetMouseLocation()
+						fromPos = Vector2.new(m.X, m.Y)
+					else
+						fromPos = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
+					end
+
+					local toPos = Vector2.new(screenPos.X, screenPos.Y)
+					local dist = (toPos - fromPos).Magnitude
+					local center = (toPos + fromPos) / 2
+					local angle = math.atan2(toPos.Y - fromPos.Y, toPos.X - fromPos.X)
+
+					Runtime.Aimlock.tracer.Size = UDim2.fromOffset(dist, 1.5)
+					Runtime.Aimlock.tracer.Position = UDim2.fromOffset(center.X, center.Y)
+					Runtime.Aimlock.tracer.Rotation = math.deg(angle)
+					Runtime.Aimlock.tracer.BackgroundColor3 = ESP_RED
+					Runtime.Aimlock.tracer.Visible = true
+				elseif Runtime.Aimlock.tracer then
+					Runtime.Aimlock.tracer.Visible = false
 				end
-
-				local targetCF = CFrame.new(cam.CFrame.Position, targetPos)
-				local smooth = math.clamp(1 - (Config.Aimlock.Smoothness / 100), 0.05, 1)
-				cam.CFrame = cam.CFrame:Lerp(targetCF, smooth)
+			elseif Runtime.Aimlock.tracer then
+				Runtime.Aimlock.tracer.Visible = false
 			end
 		end)
 	end
@@ -3021,8 +3169,8 @@ function Features.StartHotkeys()
 			Features.ToggleInfiniteJumpActive()
 		elseif name == Config.Main.Movement.NoclipKeybind then
 			Features.ToggleNoclipActive()
-		elseif name == Config.Aimlock.Keybind and Config.Aimlock.Enabled then
-			Runtime.Aimlock.locked = not Runtime.Aimlock.locked
+		elseif name == Config.Aimlock.Keybind then
+			Features.ToggleAimlockLock()
 		end
 	end)
 end
@@ -3030,7 +3178,7 @@ end
 RATAHUB.Features = Features
 
 --=====================================================================
--- DYNAMIC PLAYER LIST HELPERS
+-- DYNAMIC PLAYER & TEAM LIST HELPERS
 --=====================================================================
 local function getPlayerList()
 	local list = { "Nadie" }
@@ -3276,9 +3424,15 @@ Players.PlayerAdded:Connect(function()
 end)
 
 Players.PlayerRemoving:Connect(function(leavingPlayer)
+	Runtime.FriendsCache[leavingPlayer.UserId] = nil
+
 	if Config.Main.Player.HitboxTarget == leavingPlayer.Name then Config.Main.Player.HitboxTarget = "Nadie" end
 	if Config.ESP.WhitelistTarget == leavingPlayer.Name then Config.ESP.WhitelistTarget = "Nadie" end
 	if Config.Aimlock.WhitelistTarget == leavingPlayer.Name then Config.Aimlock.WhitelistTarget = "Nadie" end
+
+	if Runtime.Aimlock.currentTarget == leavingPlayer then
+		Features.UnlockAimlock("left", leavingPlayer.Name)
+	end
 
 	if Runtime.ESP.objects[leavingPlayer] then
 		local o = Runtime.ESP.objects[leavingPlayer]
@@ -3298,7 +3452,7 @@ do
 	local esp = win:CreateTab({ Name = "ESP", Icon = "◉", SubTitle = "Highlights, names and tracers" })
 	local E = Config.ESP
 
-	esp:CreateSection("Highlight ESP")
+	esp:CreateSection("General")
 	Controls.ESP.Highlight = esp:CreateToggle({
 		Name = "ESP Highlight",
 		CurrentValue = E.Highlight,
@@ -3307,8 +3461,6 @@ do
 			Features.UpdateESP()
 		end,
 	})
-
-	esp:CreateSection("Name ESP")
 	Controls.ESP.Names = esp:CreateToggle({
 		Name = "ESP Nombres",
 		CurrentValue = E.Names,
@@ -3352,13 +3504,15 @@ do
 			E.TextSize = Value
 		end,
 	})
-
-	esp:CreateSection("Tracers")
 	Controls.ESP.Tracers = esp:CreateToggle({
 		Name = "Tracer Whitelist (Rojo)",
 		CurrentValue = E.Tracers,
 		Callback = function(Value)
 			E.Tracers = Value
+			if Value and Config.Aimlock.EnemyTracers then
+				Config.Aimlock.EnemyTracers = false
+				if Controls.Aimlock.EnemyTracers then Controls.Aimlock.EnemyTracers:Set(false) end
+			end
 			Features.UpdateESP()
 		end,
 	})
@@ -3379,9 +3533,10 @@ do
 	})
 
 	esp:CreateSection("Whitelist")
-	Controls.ESP.WhitelistMode = esp:CreateToggle({
+	Controls.ESP.WhitelistMode = esp:CreateDropdown({
 		Name = "ESP Whitelist Mode",
-		CurrentValue = E.WhitelistMode,
+		Options = { "Disabled", "Ignore Whitelist", "Only Whitelist" },
+		CurrentOption = E.WhitelistMode,
 		Callback = function(Value)
 			E.WhitelistMode = Value
 			if E.SyncAimlock and Controls.Aimlock.WhitelistMode then
@@ -3446,6 +3601,13 @@ do
 	})
 
 	esp:CreateSection("Team Check")
+	Controls.ESP.FriendCheck = esp:CreateToggle({
+		Name = "Friend Check (Verde)",
+		CurrentValue = E.FriendCheck,
+		Callback = function(Value)
+			E.FriendCheck = Value
+		end,
+	})
 	Controls.ESP.IgnoreTeams = esp:CreateDropdown({
 		Name = "Equipos a Ignorar",
 		Options = IGNORE_TEAMS,
@@ -3521,6 +3683,13 @@ do
 			A.AimPart = Value
 		end,
 	})
+	Controls.Aimlock.FriendCheck = aim:CreateToggle({
+		Name = "Friend Check (No lockear amigos)",
+		CurrentValue = A.FriendCheck,
+		Callback = function(Value)
+			A.FriendCheck = Value
+		end,
+	})
 	Controls.Aimlock.UseMaxDistance = aim:CreateToggle({
 		Name = "Use Max Distance",
 		CurrentValue = A.UseMaxDistance,
@@ -3537,6 +3706,8 @@ do
 			A.MaxDistance = Value
 		end,
 	})
+
+	aim:CreateSection("FOV")
 	Controls.Aimlock.UseFOV = aim:CreateToggle({
 		Name = "Use FOV",
 		CurrentValue = A.UseFOV,
@@ -3560,6 +3731,11 @@ do
 		CurrentValue = A.EnemyTracers,
 		Callback = function(Value)
 			A.EnemyTracers = Value
+			if Value and Config.ESP.Tracers then
+				Config.ESP.Tracers = false
+				if Controls.ESP.Tracers then Controls.ESP.Tracers:Set(false) end
+				Features.UpdateESP()
+			end
 		end,
 	})
 	Controls.Aimlock.TracerOrigin = aim:CreateDropdown({
@@ -3572,9 +3748,10 @@ do
 	})
 
 	aim:CreateSection("Whitelist")
-	Controls.Aimlock.WhitelistMode = aim:CreateToggle({
+	Controls.Aimlock.WhitelistMode = aim:CreateDropdown({
 		Name = "Aimlock Whitelist Mode",
-		CurrentValue = A.WhitelistMode,
+		Options = { "Disabled", "Ignore Whitelist", "Only Whitelist" },
+		CurrentOption = A.WhitelistMode,
 		Callback = function(Value)
 			A.WhitelistMode = Value
 			if A.SyncESP and Controls.ESP.WhitelistMode then
