@@ -2071,9 +2071,530 @@ function RATAHUBAdapter:Notify(cfg)
 end
 
 --=====================================================================
--- DEMO — RATAHUB V5 layout: 7 tabs (Main / ESP / Aimlock / Triggerbot /
--- Extras / Troll / Sounds) built entirely through the API. Every callback
--- is an empty future connection point; NO gameplay logic runs here.
+-- CONFIG / STATE  (Phase 1 — single source of truth for Main + Extras)
+--
+--   Data flow:   UI  ->  Callback  ->  Config / State  ->  Feature module
+--
+-- * Config     every user-facing VALUE. One source of truth, nothing else
+--              stores control state.
+-- * Runtime    transient objects only (connections, BodyMovers, cached
+--              parts). Never a source of truth; never placed in Config.
+-- * Features   pure logic modules. They read Config and act on the LOCAL
+--              client. They never build or touch the UI.
+-- * Controls   registry of the control handles returned by the UI, so any
+--              module (or a later phase) can call handle:Set()/:Get() and
+--              keep the UI and Config synchronized.
+--
+-- Only legitimate, local-client functionality is implemented. Features whose
+-- purpose is to manipulate other players or grant an unfair multiplayer
+-- advantage (hitbox expander, x-ray, btools) intentionally keep ONLY their
+-- UI + Config + callback wiring — no such behaviour is implemented or faked.
+--=====================================================================
+local RunService      = game:GetService("RunService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService     = game:GetService("HttpService")
+local VirtualUser     = game:GetService("VirtualUser")
+local Lighting        = game:GetService("Lighting")
+
+local DEFAULT_GRAVITY = 196.2
+local DEFAULT_FOV     = 70
+
+local Config = {
+	Main = {
+		Movement = {
+			Fly = false,
+			FlyKeybind = "V",
+			FlySpeed = 140,
+			WalkSpeedEnabled = false,
+			WalkSpeedKeybind = "C",
+			WalkSpeed = 16,
+			JumpPowerEnabled = false,
+			JumpPower = 50,
+			GravityEnabled = false,
+			Gravity = 196.2,
+			InfiniteJump = false,
+			Noclip = false,
+		},
+		Player = {
+			HitboxExpander = false,
+			HitboxSize = 5,
+			HitboxWhitelistMode = false,
+			HitboxTarget = "Nadie",
+		},
+		Utility = {
+			TargetServerPlayers = 2,
+			AntiAFK = false,
+		},
+	},
+	Extras = {
+		Camera = {
+			UnlockMaxDistance = false,
+			FOVChanger = false,
+			FOV = 70,
+			Freecam = false,
+		},
+		Vision = {
+			XRay = false,
+		},
+		Tools = {
+			ClickTP = false,
+			BTools = false,
+		},
+		Performance = {
+			FPSBoost = false,
+			AntiFling = false,
+		},
+	},
+}
+
+-- Clean public accessor for later phases. One source of truth, no loose globals.
+function RATAHUB:GetConfig() return Config end
+
+-- Registry of live control handles (populated as the UI is built below).
+local Controls = { Main = {}, Extras = {} }
+function RATAHUB:GetControls() return Controls end
+
+-- Transient runtime state (connections / body movers / caches). NEVER in Config.
+local Runtime = {
+	Fly          = { active = false, bv = nil, bg = nil, loop = nil, animate = nil },
+	WalkSpeed    = { active = false, loop = nil, original = nil },
+	JumpPower    = { loop = nil, original = nil },
+	Gravity      = { loop = nil },
+	InfiniteJump = { conn = nil },
+	Noclip       = { stepConn = nil, addedConn = nil, cache = {}, original = {} },
+	AntiAFK      = { conn = nil },
+	ClickTP      = { conn = nil },
+	Camera       = {
+		fovLoop = nil, savedFOV = nil, savedMaxZoom = nil,
+		freecamLoop = nil, freecamBegan = nil, freecamEnded = nil,
+		savedType = nil, keys = {},
+	},
+	Performance  = { antiFlingConn = nil, savedLighting = nil },
+	Hotkeys      = { conn = nil },
+}
+
+--=====================================================================
+-- FEATURE MODULES (read Config, act locally; no UI dependencies)
+--=====================================================================
+local Features = {}
+
+local function getChar() return player.Character end
+local function getHumanoid()
+	local c = player.Character
+	return c and c:FindFirstChildOfClass("Humanoid")
+end
+local function getRoot()
+	local c = player.Character
+	return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+------------------------------------------------------------- Movement: Fly
+function Features.StopFly()
+	Runtime.Fly.active = false
+	if Runtime.Fly.loop then Runtime.Fly.loop:Disconnect() Runtime.Fly.loop = nil end
+	if Runtime.Fly.bv then Runtime.Fly.bv:Destroy() Runtime.Fly.bv = nil end
+	if Runtime.Fly.bg then Runtime.Fly.bg:Destroy() Runtime.Fly.bg = nil end
+	local char = getChar()
+	if char then
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum then hum.PlatformStand = false end
+		if Runtime.Fly.animate then
+			Runtime.Fly.animate.Parent = char
+			Runtime.Fly.animate = nil
+		end
+	end
+end
+
+function Features.StartFly()
+	local char = getChar()
+	if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	local root = char.HumanoidRootPart
+	if hum then hum.PlatformStand = true end
+	if char:FindFirstChild("Animate") then
+		Runtime.Fly.animate = char.Animate:Clone()
+		char.Animate:Destroy()
+	end
+	Runtime.Fly.bv = Instance.new("BodyVelocity")
+	Runtime.Fly.bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+	Runtime.Fly.bv.Velocity = Vector3.zero
+	Runtime.Fly.bv.Parent = root
+	Runtime.Fly.bg = Instance.new("BodyGyro")
+	Runtime.Fly.bg.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+	Runtime.Fly.bg.P = 20000
+	Runtime.Fly.bg.D = 800
+	Runtime.Fly.bg.Parent = root
+	Runtime.Fly.active = true
+	Runtime.Fly.loop = RunService.RenderStepped:Connect(function()
+		if not Runtime.Fly.active then return end
+		local cam = workspace.CurrentCamera
+		if not cam then return end
+		local look = cam.CFrame.LookVector
+		local right = look:Cross(Vector3.new(0, 1, 0))
+		local move = Vector3.zero
+		if UserInputService:IsKeyDown(Enum.KeyCode.W) then move += look end
+		if UserInputService:IsKeyDown(Enum.KeyCode.S) then move -= look end
+		if UserInputService:IsKeyDown(Enum.KeyCode.A) then move -= right end
+		if UserInputService:IsKeyDown(Enum.KeyCode.D) then move += right end
+		if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0, 1, 0) end
+		if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then move -= Vector3.new(0, 1, 0) end
+		Runtime.Fly.bv.Velocity = move * Config.Main.Movement.FlySpeed
+		Runtime.Fly.bg.CFrame = cam.CFrame
+	end)
+end
+
+function Features.ToggleFly()
+	if not Config.Main.Movement.Fly then return end
+	if Runtime.Fly.active then
+		Features.StopFly()
+		RATAHUB:Notify({ Title = "Fly", Content = "Desactivado", Duration = 1.2 })
+	else
+		Features.StartFly()
+		RATAHUB:Notify({ Title = "Fly", Content = "Activado", Duration = 1.2 })
+	end
+end
+
+------------------------------------------------------------- Movement: WalkSpeed
+function Features.StartWalkSpeed()
+	if Runtime.WalkSpeed.loop then return end
+	Runtime.WalkSpeed.loop = RunService.RenderStepped:Connect(function()
+		local hum = getHumanoid()
+		if not hum then return end
+		if not Runtime.WalkSpeed.original then Runtime.WalkSpeed.original = hum.WalkSpeed end
+		local desired = Runtime.WalkSpeed.active and Config.Main.Movement.WalkSpeed
+			or (Runtime.WalkSpeed.original or 16)
+		if hum.WalkSpeed ~= desired then hum.WalkSpeed = desired end
+	end)
+end
+
+function Features.StopWalkSpeed()
+	if Runtime.WalkSpeed.loop then Runtime.WalkSpeed.loop:Disconnect() Runtime.WalkSpeed.loop = nil end
+	local hum = getHumanoid()
+	if hum and Runtime.WalkSpeed.original then hum.WalkSpeed = Runtime.WalkSpeed.original end
+end
+
+function Features.ToggleWalkSpeed()
+	if not Config.Main.Movement.WalkSpeedEnabled then return end
+	Runtime.WalkSpeed.active = not Runtime.WalkSpeed.active
+end
+
+------------------------------------------------------------- Movement: JumpPower
+function Features.StartJumpPower()
+	if Runtime.JumpPower.loop then return end
+	Runtime.JumpPower.loop = RunService.Heartbeat:Connect(function()
+		local hum = getHumanoid()
+		if not hum then return end
+		if not Runtime.JumpPower.original then
+			Runtime.JumpPower.original = hum.UseJumpPower and hum.JumpPower or hum.JumpHeight
+		end
+		local target = Config.Main.Movement.JumpPowerEnabled
+			and Config.Main.Movement.JumpPower or Runtime.JumpPower.original
+		if hum.UseJumpPower then
+			if hum.JumpPower ~= target then hum.JumpPower = target end
+		else
+			if hum.JumpHeight ~= target then hum.JumpHeight = target end
+		end
+	end)
+end
+
+function Features.StopJumpPower()
+	if Runtime.JumpPower.loop then Runtime.JumpPower.loop:Disconnect() Runtime.JumpPower.loop = nil end
+	local hum = getHumanoid()
+	if hum and Runtime.JumpPower.original then
+		if hum.UseJumpPower then hum.JumpPower = Runtime.JumpPower.original
+		else hum.JumpHeight = Runtime.JumpPower.original end
+	end
+end
+
+------------------------------------------------------------- Movement: Gravity
+function Features.StartGravity()
+	if Runtime.Gravity.loop then return end
+	Runtime.Gravity.loop = RunService.RenderStepped:Connect(function()
+		workspace.Gravity = Config.Main.Movement.GravityEnabled
+			and Config.Main.Movement.Gravity or DEFAULT_GRAVITY
+	end)
+end
+
+function Features.StopGravity()
+	if Runtime.Gravity.loop then Runtime.Gravity.loop:Disconnect() Runtime.Gravity.loop = nil end
+	workspace.Gravity = DEFAULT_GRAVITY
+end
+
+------------------------------------------------------------- Movement: Infinite Jump
+function Features.SetInfiniteJump(enabled)
+	if enabled and not Runtime.InfiniteJump.conn then
+		Runtime.InfiniteJump.conn = UserInputService.JumpRequest:Connect(function()
+			if Config.Main.Movement.InfiniteJump then
+				local hum = getHumanoid()
+				if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+			end
+		end)
+	elseif not enabled and Runtime.InfiniteJump.conn then
+		Runtime.InfiniteJump.conn:Disconnect()
+		Runtime.InfiniteJump.conn = nil
+	end
+end
+
+------------------------------------------------------------- Movement: Noclip
+function Features.StopNoclip()
+	if Runtime.Noclip.stepConn then Runtime.Noclip.stepConn:Disconnect() Runtime.Noclip.stepConn = nil end
+	if Runtime.Noclip.addedConn then Runtime.Noclip.addedConn:Disconnect() Runtime.Noclip.addedConn = nil end
+	for part, state in pairs(Runtime.Noclip.original) do
+		if part and part.Parent then part.CanCollide = state end
+	end
+	table.clear(Runtime.Noclip.original)
+	table.clear(Runtime.Noclip.cache)
+end
+
+function Features.StartNoclip()
+	Features.StopNoclip()
+	local char = getChar()
+	if not char then return end
+	for _, part in pairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then
+			table.insert(Runtime.Noclip.cache, part)
+			if Runtime.Noclip.original[part] == nil then Runtime.Noclip.original[part] = part.CanCollide end
+		end
+	end
+	Runtime.Noclip.addedConn = char.DescendantAdded:Connect(function(part)
+		if part:IsA("BasePart") then
+			table.insert(Runtime.Noclip.cache, part)
+			if Runtime.Noclip.original[part] == nil then Runtime.Noclip.original[part] = part.CanCollide end
+		end
+	end)
+	Runtime.Noclip.stepConn = RunService.Stepped:Connect(function()
+		if Config.Main.Movement.Noclip then
+			for _, part in ipairs(Runtime.Noclip.cache) do
+				if part and part.Parent then part.CanCollide = false end
+			end
+		end
+	end)
+end
+
+------------------------------------------------------------- Player: Reset
+function Features.ResetCharacter()
+	pcall(function()
+		local char = getChar()
+		if char then char:BreakJoints() end
+	end)
+	RATAHUB:Notify({ Title = "Reset", Content = "Reiniciando personaje...", Duration = 1.5 })
+end
+
+------------------------------------------------------------- Utility: Server hop / rejoin / anti-afk
+function Features.ServerHop()
+	local want = Config.Main.Utility.TargetServerPlayers
+	RATAHUB:Notify({ Title = "Server Finder", Content = "Buscando servidor con " .. want .. " jugadores...", Duration = 3 })
+	task.spawn(function()
+		local ok, result = pcall(function()
+			return HttpService:JSONDecode(game:HttpGet(
+				"https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"))
+		end)
+		if ok and result and result.data then
+			for _, s in ipairs(result.data) do
+				if s.playing and s.playing == want and s.id ~= game.JobId then
+					TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, player)
+					return
+				end
+			end
+			for _, s in ipairs(result.data) do
+				if s.playing and s.playing <= want and s.id ~= game.JobId then
+					TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, player)
+					return
+				end
+			end
+			RATAHUB:Notify({ Title = "Server Finder", Content = "No se encontró servidor con esa cantidad", Duration = 3 })
+		else
+			RATAHUB:Notify({ Title = "Error", Content = "Falló la consulta de servidores", Duration = 2 })
+		end
+	end)
+end
+
+function Features.SetAntiAFK(enabled)
+	if enabled and not Runtime.AntiAFK.conn then
+		Runtime.AntiAFK.conn = player.Idled:Connect(function()
+			VirtualUser:ClickButton2(Vector2.zero)
+		end)
+		RATAHUB:Notify({ Title = "Anti-AFK", Content = "Activado", Duration = 1.5 })
+	elseif not enabled and Runtime.AntiAFK.conn then
+		Runtime.AntiAFK.conn:Disconnect()
+		Runtime.AntiAFK.conn = nil
+		RATAHUB:Notify({ Title = "Anti-AFK", Content = "Desactivado", Duration = 1.5 })
+	end
+end
+
+function Features.Rejoin()
+	RATAHUB:Notify({ Title = "Rejoin", Content = "Reconectando al mismo servidor...", Duration = 2 })
+	TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player)
+end
+
+------------------------------------------------------------- Extras: Camera
+function Features.SetUnlockMaxDistance(enabled)
+	if enabled then
+		Runtime.Camera.savedMaxZoom = Runtime.Camera.savedMaxZoom or player.CameraMaxZoomDistance
+		player.CameraMaxZoomDistance = 1e9
+	else
+		player.CameraMaxZoomDistance = Runtime.Camera.savedMaxZoom or 128
+	end
+end
+
+function Features.SetFOVChanger(enabled)
+	if enabled then
+		if Runtime.Camera.fovLoop then return end
+		Runtime.Camera.savedFOV = Runtime.Camera.savedFOV or (workspace.CurrentCamera and workspace.CurrentCamera.FieldOfView) or DEFAULT_FOV
+		Runtime.Camera.fovLoop = RunService.RenderStepped:Connect(function()
+			if Config.Extras.Camera.FOVChanger then
+				local cam = workspace.CurrentCamera
+				if cam then cam.FieldOfView = Config.Extras.Camera.FOV end
+			end
+		end)
+	else
+		if Runtime.Camera.fovLoop then Runtime.Camera.fovLoop:Disconnect() Runtime.Camera.fovLoop = nil end
+		local cam = workspace.CurrentCamera
+		if cam then cam.FieldOfView = Runtime.Camera.savedFOV or DEFAULT_FOV end
+	end
+end
+
+function Features.StartFreecam()
+	if Runtime.Camera.freecamLoop then return end
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+	Runtime.Camera.savedType = cam.CameraType
+	cam.CameraType = Enum.CameraType.Scriptable
+	local keys = Runtime.Camera.keys
+	Runtime.Camera.freecamBegan = UserInputService.InputBegan:Connect(function(input, gp)
+		if gp then return end
+		keys[input.KeyCode] = true
+	end)
+	Runtime.Camera.freecamEnded = UserInputService.InputEnded:Connect(function(input)
+		keys[input.KeyCode] = nil
+	end)
+	Runtime.Camera.freecamLoop = RunService.RenderStepped:Connect(function(dt)
+		local c = workspace.CurrentCamera
+		if not c then return end
+		local move = Vector3.zero
+		if keys[Enum.KeyCode.W] then move += Vector3.new(0, 0, -1) end
+		if keys[Enum.KeyCode.S] then move += Vector3.new(0, 0, 1) end
+		if keys[Enum.KeyCode.A] then move += Vector3.new(-1, 0, 0) end
+		if keys[Enum.KeyCode.D] then move += Vector3.new(1, 0, 0) end
+		if keys[Enum.KeyCode.E] then move += Vector3.new(0, 1, 0) end
+		if keys[Enum.KeyCode.Q] then move += Vector3.new(0, -1, 0) end
+		local speed = (keys[Enum.KeyCode.LeftShift] and 120 or 60) * dt
+		c.CFrame = c.CFrame * CFrame.new(move * speed)
+	end)
+end
+
+function Features.StopFreecam()
+	if Runtime.Camera.freecamLoop then Runtime.Camera.freecamLoop:Disconnect() Runtime.Camera.freecamLoop = nil end
+	if Runtime.Camera.freecamBegan then Runtime.Camera.freecamBegan:Disconnect() Runtime.Camera.freecamBegan = nil end
+	if Runtime.Camera.freecamEnded then Runtime.Camera.freecamEnded:Disconnect() Runtime.Camera.freecamEnded = nil end
+	table.clear(Runtime.Camera.keys)
+	local cam = workspace.CurrentCamera
+	if cam and Runtime.Camera.savedType then cam.CameraType = Runtime.Camera.savedType end
+end
+
+function Features.SetFreecam(enabled)
+	if enabled then Features.StartFreecam() else Features.StopFreecam() end
+end
+
+------------------------------------------------------------- Extras: Tools
+function Features.SetClickTP(enabled)
+	if enabled then
+		if Runtime.ClickTP.conn then return end
+		local mouse = player:GetMouse()
+		Runtime.ClickTP.conn = mouse.Button1Down:Connect(function()
+			if not Config.Extras.Tools.ClickTP then return end
+			local root = getRoot()
+			if root and mouse.Hit then
+				root.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0))
+			end
+		end)
+	else
+		if Runtime.ClickTP.conn then Runtime.ClickTP.conn:Disconnect() Runtime.ClickTP.conn = nil end
+	end
+end
+
+------------------------------------------------------------- Extras: Performance
+function Features.SetFPSBoost(enabled)
+	if enabled then
+		pcall(function()
+			Runtime.Performance.savedLighting = Runtime.Performance.savedLighting or {
+				GlobalShadows = Lighting.GlobalShadows,
+				FogEnd = Lighting.FogEnd,
+			}
+			Lighting.GlobalShadows = false
+			Lighting.FogEnd = 9e9
+			for _, obj in ipairs(workspace:GetDescendants()) do
+				if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Smoke")
+					or obj:IsA("Fire") or obj:IsA("Sparkles") then
+					obj.Enabled = false
+				elseif obj:IsA("BasePart") then
+					obj.Material = Enum.Material.Plastic
+					obj.Reflectance = 0
+				end
+			end
+		end)
+	else
+		pcall(function()
+			local s = Runtime.Performance.savedLighting
+			if s then
+				Lighting.GlobalShadows = s.GlobalShadows
+				Lighting.FogEnd = s.FogEnd
+			end
+		end)
+	end
+end
+
+function Features.SetAntiFling(enabled)
+	if enabled then
+		if Runtime.Performance.antiFlingConn then return end
+		Runtime.Performance.antiFlingConn = RunService.Stepped:Connect(function()
+			local root = getRoot()
+			if root then
+				if root.AssemblyAngularVelocity.Magnitude > 50 then
+					root.AssemblyAngularVelocity = Vector3.zero
+				end
+				local lv = root.AssemblyLinearVelocity
+				if lv.Magnitude > 250 then
+					root.AssemblyLinearVelocity = Vector3.new(0, lv.Y, 0)
+				end
+			end
+		end)
+	else
+		if Runtime.Performance.antiFlingConn then
+			Runtime.Performance.antiFlingConn:Disconnect()
+			Runtime.Performance.antiFlingConn = nil
+		end
+	end
+end
+
+------------------------------------------------------------- Runtime hotkeys (Fly / WalkSpeed)
+-- The UI keybind control only REBINDS a key (its callback fires when a new key
+-- is captured). Actual in-game hotkey triggering is a feature concern, handled
+-- here with a single event-driven listener that reads the keybinds from Config.
+-- This adds no polling and does not touch the UI framework.
+function Features.StartHotkeys()
+	if Runtime.Hotkeys.conn then return end
+	Runtime.Hotkeys.conn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed then return end
+		if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+		local name = input.KeyCode.Name
+		if name == Config.Main.Movement.FlyKeybind then
+			Features.ToggleFly()
+		elseif name == Config.Main.Movement.WalkSpeedKeybind then
+			Features.ToggleWalkSpeed()
+		end
+	end)
+end
+
+RATAHUB.Features = Features
+
+--=====================================================================
+-- RATAHUB V5 layout: 7 tabs (Main / ESP / Aimlock / Triggerbot / Extras /
+-- Troll / Sounds) built through the API.
+--
+-- PHASE 1 wires Main and Extras through Config / State / Feature modules
+-- (UI -> Callback -> Config -> Feature). The remaining five tabs keep their
+-- empty future-connection callbacks and are untouched by this phase.
 --=====================================================================
 local win = RATAHUB:CreateWindow({ Title = "RATAHUB", SubTitle = "V5", Version = "V5" })
 
@@ -2090,94 +2611,111 @@ local SOUND_LIST = {
 	"CS:GO Headshot",
 }
 
-do -- 1. MAIN
+do -- 1. MAIN  (Phase 1 — wired: UI -> Callback -> Config -> Feature)
 	local main = win:CreateTab({ Name = "Main", Icon = "◆", SubTitle = "Movement, player and utility" })
+	local M = Config.Main
 
 	main:CreateSection("Movement")
-	main:CreateToggle({ Name = "Fly", CurrentValue = false,
+	-- Toggle enables Fly; the keybind (handled by Features.StartHotkeys) actually
+	-- activates/deactivates it in-game.
+	Controls.Main.Fly = main:CreateToggle({ Name = "Fly", CurrentValue = M.Movement.Fly,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Movement.Fly = Value
+			if not Value then Features.StopFly() end
 		end })
-	main:CreateKeybind({ Name = "Fly Keybind", CurrentKeybind = "V",
+	Controls.Main.FlyKeybind = main:CreateKeybind({ Name = "Fly Keybind", CurrentKeybind = M.Movement.FlyKeybind,
 		Callback = function(Key)
-			-- FUTURE LOGIC HERE
+			M.Movement.FlyKeybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
 		end })
-	main:CreateSlider({ Name = "Fly Speed", Range = { 50, 600 }, Increment = 5, CurrentValue = 140,
+	Controls.Main.FlySpeed = main:CreateSlider({ Name = "Fly Speed", Range = { 50, 600 }, Increment = 5, CurrentValue = M.Movement.FlySpeed,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Movement.FlySpeed = Value
 		end })
-	main:CreateToggle({ Name = "WalkSpeed", CurrentValue = false,
+	Controls.Main.WalkSpeed = main:CreateToggle({ Name = "WalkSpeed", CurrentValue = M.Movement.WalkSpeedEnabled,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Movement.WalkSpeedEnabled = Value
+			if Value then
+				Features.StartWalkSpeed()
+			else
+				Runtime.WalkSpeed.active = false
+				Features.StopWalkSpeed()
+			end
 		end })
-	main:CreateKeybind({ Name = "WalkSpeed Keybind", CurrentKeybind = "C",
+	Controls.Main.WalkSpeedKeybind = main:CreateKeybind({ Name = "WalkSpeed Keybind", CurrentKeybind = M.Movement.WalkSpeedKeybind,
 		Callback = function(Key)
-			-- FUTURE LOGIC HERE
+			M.Movement.WalkSpeedKeybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
 		end })
-	main:CreateSlider({ Name = "WalkSpeed", Range = { 16, 300 }, Increment = 1, CurrentValue = 16,
+	Controls.Main.WalkSpeedValue = main:CreateSlider({ Name = "WalkSpeed", Range = { 16, 300 }, Increment = 1, CurrentValue = M.Movement.WalkSpeed,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Movement.WalkSpeed = Value
 		end })
-	main:CreateToggle({ Name = "JumpPower", CurrentValue = false,
+	Controls.Main.JumpPower = main:CreateToggle({ Name = "JumpPower", CurrentValue = M.Movement.JumpPowerEnabled,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Movement.JumpPowerEnabled = Value
+			if Value then Features.StartJumpPower() else Features.StopJumpPower() end
 		end })
-	main:CreateSlider({ Name = "JumpPower", Range = { 50, 300 }, Increment = 1, CurrentValue = 50,
+	Controls.Main.JumpPowerValue = main:CreateSlider({ Name = "JumpPower", Range = { 50, 300 }, Increment = 1, CurrentValue = M.Movement.JumpPower,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Movement.JumpPower = Value
 		end })
-	main:CreateToggle({ Name = "Gravity", CurrentValue = false,
+	Controls.Main.Gravity = main:CreateToggle({ Name = "Gravity", CurrentValue = M.Movement.GravityEnabled,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Movement.GravityEnabled = Value
+			if Value then Features.StartGravity() else Features.StopGravity() end
 		end })
-	main:CreateSlider({ Name = "Gravity", Range = { 0, 196.2 }, Increment = 0.1, CurrentValue = 196.2,
+	Controls.Main.GravityValue = main:CreateSlider({ Name = "Gravity", Range = { 0, 196.2 }, Increment = 0.1, CurrentValue = M.Movement.Gravity,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Movement.Gravity = Value
 		end })
-	main:CreateToggle({ Name = "Infinite Jump", CurrentValue = false,
+	Controls.Main.InfiniteJump = main:CreateToggle({ Name = "Infinite Jump", CurrentValue = M.Movement.InfiniteJump,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Movement.InfiniteJump = Value
+			Features.SetInfiniteJump(Value)
 		end })
-	main:CreateToggle({ Name = "Noclip", CurrentValue = false,
+	Controls.Main.Noclip = main:CreateToggle({ Name = "Noclip", CurrentValue = M.Movement.Noclip,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Movement.Noclip = Value
+			if Value then Features.StartNoclip() else Features.StopNoclip() end
 		end })
 
 	main:CreateSection("Player")
-	main:CreateButton({ Name = "Reset Personaje (Desbuguear / Respawn)", Callback = function()
-		-- FUTURE LOGIC HERE
+	Controls.Main.Reset = main:CreateButton({ Name = "Reset Personaje (Desbuguear / Respawn)", Callback = function()
+		Features.ResetCharacter()
 	end })
-	main:CreateToggle({ Name = "Hitbox Expander", CurrentValue = false,
+	-- Hitbox tools would alter OTHER players' characters (unfair multiplayer
+	-- advantage): UI + Config + callback wiring only, no behaviour implemented.
+	Controls.Main.HitboxExpander = main:CreateToggle({ Name = "Hitbox Expander", CurrentValue = M.Player.HitboxExpander,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Player.HitboxExpander = Value
 		end })
-	main:CreateSlider({ Name = "Hitbox Size", Range = { 1, 30 }, Increment = 1, CurrentValue = 5,
+	Controls.Main.HitboxSize = main:CreateSlider({ Name = "Hitbox Size", Range = { 1, 30 }, Increment = 1, CurrentValue = M.Player.HitboxSize,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Player.HitboxSize = Value
 		end })
-	main:CreateToggle({ Name = "Hitbox Whitelist Mode", CurrentValue = false,
+	Controls.Main.HitboxWhitelistMode = main:CreateToggle({ Name = "Hitbox Whitelist Mode", CurrentValue = M.Player.HitboxWhitelistMode,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Player.HitboxWhitelistMode = Value
 		end })
-	main:CreateDropdown({ Name = "Seleccionar Objetivo Whitelist", Options = WHITELIST_TARGETS, CurrentOption = "Nadie",
+	Controls.Main.HitboxTarget = main:CreateDropdown({ Name = "Seleccionar Objetivo Whitelist", Options = WHITELIST_TARGETS, CurrentOption = M.Player.HitboxTarget,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Player.HitboxTarget = Value
 		end })
 
 	main:CreateSection("Utility")
-	main:CreateSlider({ Name = "Target Server Players", Range = { 1, 10 }, Increment = 1, CurrentValue = 2,
+	Controls.Main.TargetServerPlayers = main:CreateSlider({ Name = "Target Server Players", Range = { 1, 10 }, Increment = 1, CurrentValue = M.Utility.TargetServerPlayers,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Utility.TargetServerPlayers = Value
 		end })
-	main:CreateButton({ Name = "Unirse a Servidor con esa Cantidad", Callback = function()
-		-- FUTURE LOGIC HERE
+	Controls.Main.JoinServer = main:CreateButton({ Name = "Unirse a Servidor con esa Cantidad", Callback = function()
+		Features.ServerHop()
 	end })
-	main:CreateToggle({ Name = "Anti-AFK", CurrentValue = false,
+	Controls.Main.AntiAFK = main:CreateToggle({ Name = "Anti-AFK", CurrentValue = M.Utility.AntiAFK,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			M.Utility.AntiAFK = Value
+			Features.SetAntiAFK(Value)
 		end })
-	main:CreateButton({ Name = "Rejoin Same Server (Mismo Servidor)", Callback = function()
-		-- FUTURE LOGIC HERE
+	Controls.Main.Rejoin = main:CreateButton({ Name = "Rejoin Same Server (Mismo Servidor)", Callback = function()
+		Features.Rejoin()
 	end })
 end
 
@@ -2428,51 +2966,60 @@ do -- 4. TRIGGERBOT
 		end })
 end
 
-do -- 5. EXTRAS
+do -- 5. EXTRAS  (Phase 1 — wired: UI -> Callback -> Config -> Feature)
 	local extras = win:CreateTab({ Name = "Extras", Icon = "✦", SubTitle = "Camera, vision, tools, performance" })
+	local E = Config.Extras
 
 	extras:CreateSection("Camera")
-	extras:CreateToggle({ Name = "Unlock Max Camera Distance (Zoom Infinito)", CurrentValue = false,
+	Controls.Extras.UnlockMaxDistance = extras:CreateToggle({ Name = "Unlock Max Camera Distance (Zoom Infinito)", CurrentValue = E.Camera.UnlockMaxDistance,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			E.Camera.UnlockMaxDistance = Value
+			Features.SetUnlockMaxDistance(Value)
 		end })
-	extras:CreateToggle({ Name = "FOV Changer", CurrentValue = false,
+	Controls.Extras.FOVChanger = extras:CreateToggle({ Name = "FOV Changer", CurrentValue = E.Camera.FOVChanger,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			E.Camera.FOVChanger = Value
+			Features.SetFOVChanger(Value)
 		end })
-	extras:CreateSlider({ Name = "FOV", Range = { 70, 120 }, Increment = 1, CurrentValue = 70,
+	Controls.Extras.FOV = extras:CreateSlider({ Name = "FOV", Range = { 70, 120 }, Increment = 1, CurrentValue = E.Camera.FOV,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			E.Camera.FOV = Value
 		end })
-	extras:CreateToggle({ Name = "Freecam", CurrentValue = false,
+	Controls.Extras.Freecam = extras:CreateToggle({ Name = "Freecam", CurrentValue = E.Camera.Freecam,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			E.Camera.Freecam = Value
+			Features.SetFreecam(Value)
 		end })
 
 	extras:CreateSection("Vision")
-	extras:CreateToggle({ Name = "X-Ray", CurrentValue = false,
+	-- X-Ray (see-through-walls) is a vision advantage: UI + Config + callback only.
+	Controls.Extras.XRay = extras:CreateToggle({ Name = "X-Ray", CurrentValue = E.Vision.XRay,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			E.Vision.XRay = Value
 		end })
 
 	extras:CreateSection("Tools")
-	extras:CreateToggle({ Name = "Click TP", CurrentValue = false,
+	Controls.Extras.ClickTP = extras:CreateToggle({ Name = "Click TP", CurrentValue = E.Tools.ClickTP,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			E.Tools.ClickTP = Value
+			Features.SetClickTP(Value)
 		end })
-	extras:CreateToggle({ Name = "BTools", CurrentValue = false,
+	-- BTools manipulate the game world / other instances: UI + Config + callback only.
+	Controls.Extras.BTools = extras:CreateToggle({ Name = "BTools", CurrentValue = E.Tools.BTools,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			E.Tools.BTools = Value
 		end })
 
 	extras:CreateSection("Performance")
-	extras:CreateToggle({ Name = "FPS Boost", CurrentValue = false,
+	Controls.Extras.FPSBoost = extras:CreateToggle({ Name = "FPS Boost", CurrentValue = E.Performance.FPSBoost,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			E.Performance.FPSBoost = Value
+			Features.SetFPSBoost(Value)
 		end })
-	extras:CreateToggle({ Name = "Anti-Fling", CurrentValue = false,
+	Controls.Extras.AntiFling = extras:CreateToggle({ Name = "Anti-Fling", CurrentValue = E.Performance.AntiFling,
 		Callback = function(Value)
-			-- FUTURE LOGIC HERE
+			E.Performance.AntiFling = Value
+			Features.SetAntiFling(Value)
 		end })
 end
 
@@ -2521,5 +3068,16 @@ do -- 7. SOUNDS
 	end })
 end
 
+-- Start the single event-driven hotkey listener now that Config is populated
+-- (Fly / WalkSpeed keybinds trigger their Feature toggles in-game).
+Features.StartHotkeys()
+
 -- Expose the framework for external scripts / adapter usage.
-return { RATAHUB = RATAHUB, Window = win, Adapter = RATAHUBAdapter.wrap(win) }
+return {
+	RATAHUB = RATAHUB,
+	Window = win,
+	Adapter = RATAHUBAdapter.wrap(win),
+	Config = Config,
+	Controls = Controls,
+	Features = Features,
+}
