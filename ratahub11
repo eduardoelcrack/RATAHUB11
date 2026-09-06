@@ -1,14 +1,6 @@
 --[[
-	RATAHUB — Premium Roblox Utility GUI  (framework + polish pass)
-
-	Place inside a LocalScript (StarterPlayer > StarterPlayerScripts).
-
-	This file is now a REUSABLE UI FRAMEWORK, not a hardcoded screen.
-	The visual identity (theme, spacing, dimensions, tabs) is unchanged;
-	the internals were refactored so RATAHUB (or anything else) can drive
-	the UI purely through callbacks:
-
-	    RATAHUB logic  ->  state / callbacks  ->  RATAHUB UI
+	RATAHUB V5 — Premium Roblox Utility GUI Framework
+	Architecture & Fix Pass based on RATAHUB11
 
 	Public API (per window / tab):
 	    RATAHUB:CreateWindow({ Title, SubTitle, Version })
@@ -26,25 +18,24 @@
 	    Tab:CreateColorPicker({ Name, Color, Callback })                -> handle
 	    RATAHUB:Notify({ Title, Content, Duration })
 
-	Every interactive control returns a handle with :Set(value) / :Get() so
-	external logic can update the UI without knowing how it is drawn. A
-	Rayfield-style compatibility adapter (RATAHUBAdapter) is provided at the
-	bottom so existing RATAHUB/Rayfield code can forward its callbacks into
-	this UI with minimal changes.
-
-	Fully event-driven: TweenService + UserInputService only.
-	No RenderStepped / Heartbeat / while loops / polling for UI.
+	Fully event-driven: TweenService + UserInputService.
+	No unnecessary polling / RenderStepped loops.
 ]]
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local VirtualUser = game:GetService("VirtualUser")
+local Lighting = game:GetService("Lighting")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 --=====================================================================
--- THEME (approximated from the web design's oklch palette) — UNCHANGED
+-- THEME (oklch-approximated dark palette) — PRESERVED
 --=====================================================================
 local THEME = {
 	Background   = Color3.fromRGB(19, 22, 29),
@@ -68,26 +59,26 @@ local MIN_W, MIN_H = 640, 420
 local MAX_W, MAX_H = 1200, 760
 local START_W, START_H = 880, 572
 local TOPBAR_H = 52
-local FOOTER_H = 34          -- dedicated full-width footer strip at the bottom
+local FOOTER_H = 34
 local SIDEBAR_W = 200
 local NAV_ITEM_H = 44
 
 --=====================================================================
--- ANIMATION PRESETS (smoother, premium; ~0.18–0.22s where specified)
+-- ANIMATION PRESETS
 --=====================================================================
-local HOVER      = TweenInfo.new(0.15, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
-local PRESS      = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local TOGGLE     = TweenInfo.new(0.20, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-local TOGGLE_KNOB= TweenInfo.new(0.20, Enum.EasingStyle.Back, Enum.EasingDirection.Out) -- subtle overshoot
-local PULSE_UP   = TweenInfo.new(0.09, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
-local PULSE_DOWN = TweenInfo.new(0.13, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
-local SLIDE      = TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-local DROP       = TweenInfo.new(0.20, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
-local NOTIF_IN   = TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-local NOTIF_OUT  = TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+local HOVER       = TweenInfo.new(0.15, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+local PRESS       = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local TOGGLE      = TweenInfo.new(0.20, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local TOGGLE_KNOB = TweenInfo.new(0.20, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local PULSE_UP    = TweenInfo.new(0.09, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+local PULSE_DOWN  = TweenInfo.new(0.13, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+local SLIDE       = TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local DROP        = TweenInfo.new(0.20, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
+local NOTIF_IN    = TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local NOTIF_OUT   = TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
 --=====================================================================
--- SMALL HELPERS
+-- UTILITY HELPERS
 --=====================================================================
 local function create(className, props, children)
 	local inst = Instance.new(className)
@@ -134,7 +125,13 @@ local function clamp(v, lo, hi)
 	return math.min(hi, math.max(lo, v))
 end
 
--- Adds a UIScale and wires hover/press feedback (no layout size change).
+local function getDecimals(step)
+	local s = tostring(step)
+	local dot = s:find("%.")
+	if dot then return #s - dot end
+	return 0
+end
+
 local function attachInteract(button, opts)
 	opts = opts or {}
 	local hoverScale = opts.hover or 1.02
@@ -202,7 +199,6 @@ create("UIListLayout", {
 local RATAHUB = {}
 RATAHUB.__index = RATAHUB
 
--- Generic notification (replacement for Rayfield:Notify)
 function RATAHUB:Notify(cfg)
 	cfg = cfg or {}
 	local card = create("Frame", {
@@ -248,7 +244,6 @@ function RATAHUB:Notify(cfg)
 		Parent = card,
 	})
 
-	-- enter
 	card.BackgroundTransparency = 1
 	tween(card, NOTIF_IN, { Position = UDim2.fromOffset(0, 0), BackgroundTransparency = 0 })
 
@@ -267,7 +262,7 @@ function RATAHUB:Notify(cfg)
 end
 
 --=====================================================================
--- WINDOW
+-- WINDOW (TOPBAR + SIDEBAR + CONTENT + FOOTER)
 --=====================================================================
 local Window = {}
 Window.__index = Window
@@ -275,12 +270,6 @@ Window.__index = Window
 function RATAHUB:CreateWindow(cfg)
 	cfg = cfg or {}
 
-	-- The window is anchored at its CENTER and pinned to the screen centre on
-	-- creation. Because the AnchorPoint is (0.5, 0.5), resizing only alters
-	-- Size and the window expands/shrinks equally around that centre, and it
-	-- starts perfectly centred on any screen resolution. It IS draggable from
-	-- the top bar (see the DRAG section below); dragging offsets its Position
-	-- without ever changing its Size.
 	local window = create("Frame", {
 		Name = "Window",
 		AnchorPoint = Vector2.new(0.5, 0.5),
@@ -301,7 +290,7 @@ function RATAHUB:CreateWindow(cfg)
 	}, Window)
 
 	--------------------------------------------------------------
-	-- TOP BAR (header — also the drag handle)
+	-- TOP BAR (Header & Drag handle)
 	--------------------------------------------------------------
 	local topBar = create("Frame", {
 		Name = "TopBar",
@@ -360,9 +349,9 @@ function RATAHUB:CreateWindow(cfg)
 		Font = FONT_BOLD, TextSize = 15,
 		Parent = topBar,
 	})
-		local badge = create("Frame", {
-			Position = UDim2.fromOffset(136, 16),
-			Size = UDim2.fromOffset(62, 20),
+	local badge = create("Frame", {
+		Position = UDim2.fromOffset(136, 16),
+		Size = UDim2.fromOffset(62, 20),
 		BackgroundColor3 = THEME.Secondary,
 		BorderSizePixel = 0,
 		Parent = topBar,
@@ -378,10 +367,6 @@ function RATAHUB:CreateWindow(cfg)
 		Parent = badge,
 	})
 
-	-- Top-right control buttons (minimize / close). Rounded hover background,
-	-- press feedback via UIScale, and a destructive tint for Close. They are
-	-- TextButtons that sink input, so a click on them never reaches
-	-- topBar.InputBegan and therefore never starts a drag.
 	local function controlButton(name, symbol, xOffset, hoverColor, hoverText)
 		local btn = create("TextButton", {
 			Name = name,
@@ -424,7 +409,7 @@ function RATAHUB:CreateWindow(cfg)
 		return btn
 	end
 
-	local body -- forward ref for minimize
+	local body
 	local minimized = false
 	local minimizeBtn = controlButton("Minimize", "−", -34, THEME.Secondary, THEME.Foreground)
 	local closeBtn = controlButton("Close", "✕", 0, THEME.Destructive, THEME.Foreground)
@@ -437,25 +422,11 @@ function RATAHUB:CreateWindow(cfg)
 	end)
 
 	--------------------------------------------------------------
-	-- RESIZE (center-locked, size-only). The window centre is FIXED
-	-- by its AnchorPoint (0.5, 0.5) + Position (0.5, 0.5) scale, so a
-	-- resize NEVER touches window.Position — it only sets window.Size.
-	-- Each corner captures the mouse and W/H exactly ONCE, then maps
-	-- the raw mouse delta (current - original) to a symmetric size
-	-- change (×2, because one side moves while the opposite side
-	-- expands equally around the fixed centre). Nothing accumulates.
+	-- RESIZE (PROTECTED — Center-locked formula)
 	--------------------------------------------------------------
-	-- Shared interaction guard. Dragging and resizing read/write these two
-	-- flags so the two systems are strictly mutually exclusive: a resize can
-	-- never begin while a drag is active, and a drag can never begin while a
-	-- resize is active. They are declared here, ABOVE both systems, so both
-	-- close over the exact same booleans.
 	local dragActive = false
 	local resizeActive = false
 
-	-- signX / signY: how this corner's dx / dy map to width / height.
-	--   +1 -> dragging in the positive axis grows the dimension
-	--   -1 -> dragging in the positive axis shrinks the dimension
 	local CORNERS = {
 		{ id = "tl", ax = 0, ay = 0, pos = UDim2.new(0, 0, 0, 0), signX = -1, signY = -1 },
 		{ id = "tr", ax = 1, ay = 0, pos = UDim2.new(1, 0, 0, 0), signX =  1, signY = -1 },
@@ -463,7 +434,6 @@ function RATAHUB:CreateWindow(cfg)
 		{ id = "br", ax = 1, ay = 1, pos = UDim2.new(1, 0, 1, 0), signX =  1, signY =  1 },
 	}
 
-	-- Invisible hitbox, sized generously for easy grabbing.
 	local HANDLE = 22
 
 	for _, c in ipairs(CORNERS) do
@@ -481,7 +451,7 @@ function RATAHUB:CreateWindow(cfg)
 		})
 
 		local resizing = false
-		local origin -- frozen { mouseX, mouseY, width, height }, captured ONCE
+		local origin
 		local moveConn, endConn
 
 		local function stopResize()
@@ -497,14 +467,9 @@ function RATAHUB:CreateWindow(cfg)
 				and input.UserInputType ~= Enum.UserInputType.Touch then
 				return
 			end
-			-- Resize has priority, but never start one mid-drag.
 			if resizing or dragActive then return end
 			resizeActive = true
 
-			-- Freeze the mouse position and the current size exactly once.
-			-- Every frame measures the delta from THESE frozen values, so the
-			-- window can be resized over and over from any corner without any
-			-- drift or accumulation.
 			origin = {
 				mouseX = input.Position.X,
 				mouseY = input.Position.Y,
@@ -523,21 +488,12 @@ function RATAHUB:CreateWindow(cfg)
 				local dx = moveInput.Position.X - origin.mouseX
 				local dy = moveInput.Position.Y - origin.mouseY
 
-				-- ×2 so the window grows/shrinks symmetrically around the
-				-- fixed centre while the grabbed corner tracks the cursor.
 				local newW = clamp(origin.width  + c.signX * dx * 2, MIN_W, MAX_W)
 				local newH = clamp(origin.height + c.signY * dy * 2, MIN_H, MAX_H)
 
-				-- ONLY Size changes. Position is never touched, so the centre
-				-- stays exactly put.
 				window.Size = UDim2.fromOffset(newW, newH)
 			end)
 
-			-- The release is tracked GLOBALLY, not on the handle. The handle is
-			-- a tiny hitbox the pointer leaves the instant you start dragging,
-			-- so handle.InputEnded would miss the release and leave the move
-			-- connection alive. Disconnecting both here guarantees there is
-			-- never a leftover resize connection.
 			endConn = UserInputService.InputEnded:Connect(function(endInput)
 				if endInput.UserInputType == Enum.UserInputType.MouseButton1
 					or endInput.UserInputType == Enum.UserInputType.Touch then
@@ -548,24 +504,12 @@ function RATAHUB:CreateWindow(cfg)
 	end
 
 	--------------------------------------------------------------
-	-- DRAG (top bar only, jump-free). Draggable from the header. The
-	-- window keeps its AnchorPoint (0.5, 0.5); it starts centred and
-	-- then follows the mouse from wherever it currently is.
-	--
-	-- Zero-jump principle: on press we snapshot the mouse position and
-	-- the window's CURRENT UDim2 exactly once. Every move computes the
-	-- absolute delta from that ORIGINAL mouse point and adds it to the
-	-- ORIGINAL position — nothing is accumulated frame-to-frame and the
-	-- current position is never re-sampled mid-drag, so grabbing the bar
-	-- moves the window 1:1 with the cursor with no snap.
-	--
-	-- The minimize/close controls are TextButtons that sink input, so a
-	-- click on them never reaches topBar.InputBegan and never drags.
+	-- DRAG (PROTECTED — Zero-jump header drag)
 	--------------------------------------------------------------
 	do
 		local dragging = false
-		local dragStartX, dragStartY   -- mouse position frozen at press
-		local startScaleX, startOffX   -- window Position frozen at press
+		local dragStartX, dragStartY
+		local startScaleX, startOffX
 		local startScaleY, startOffY
 		local moveConn, endConn
 
@@ -581,7 +525,6 @@ function RATAHUB:CreateWindow(cfg)
 				and input.UserInputType ~= Enum.UserInputType.Touch then
 				return
 			end
-			-- Never begin a drag while a resize is in progress.
 			if dragging or resizeActive then return end
 
 			dragging = true
@@ -597,7 +540,6 @@ function RATAHUB:CreateWindow(cfg)
 					and moveInput.UserInputType ~= Enum.UserInputType.Touch then
 					return
 				end
-				-- Delta measured from the ORIGINAL grab point every frame.
 				local dx = moveInput.Position.X - dragStartX
 				local dy = moveInput.Position.Y - dragStartY
 				window.Position = UDim2.new(
@@ -606,8 +548,6 @@ function RATAHUB:CreateWindow(cfg)
 				)
 			end)
 
-			-- Global release so a drag that wanders off the top bar still
-			-- ends correctly and the connection is always cleaned up.
 			endConn = UserInputService.InputEnded:Connect(function(endInput)
 				if endInput.UserInputType == Enum.UserInputType.MouseButton1
 					or endInput.UserInputType == Enum.UserInputType.Touch then
@@ -618,11 +558,8 @@ function RATAHUB:CreateWindow(cfg)
 	end
 
 	--------------------------------------------------------------
-	-- BODY
+	-- BODY (Sidebar + Content)
 	--------------------------------------------------------------
-	-- Body sits between the top bar and the dedicated footer strip, so its
-	-- height reserves BOTH so the scrolling content can never overlap the
-	-- footer. Only its Size depends on the window size, so it resizes cleanly.
 	body = create("Frame", {
 		Name = "Body",
 		Position = UDim2.fromOffset(0, TOPBAR_H),
@@ -632,7 +569,6 @@ function RATAHUB:CreateWindow(cfg)
 		Parent = window,
 	})
 
-	-- ---------- SIDEBAR ----------
 	local sidebar = create("Frame", {
 		Name = "Sidebar",
 		Size = UDim2.new(0, SIDEBAR_W, 1, 0),
@@ -664,8 +600,6 @@ function RATAHUB:CreateWindow(cfg)
 		Parent = sidebar,
 	})
 
-	-- Nav now fills the sidebar; the footer lives in its own full-width strip
-	-- at the bottom of the window, no longer reserved for inside the sidebar.
 	local nav = create("Frame", {
 		Position = UDim2.fromOffset(0, 30),
 		Size = UDim2.new(1, 0, 1, -34),
@@ -684,7 +618,6 @@ function RATAHUB:CreateWindow(cfg)
 	corner(10, highlight)
 	stroke(highlight, 0.8, THEME.Primary)
 
-	-- ---------- CONTENT ----------
 	local content = create("Frame", {
 		Name = "Content",
 		Position = UDim2.fromOffset(SIDEBAR_W, 0),
@@ -749,11 +682,7 @@ function RATAHUB:CreateWindow(cfg)
 	})
 
 	--------------------------------------------------------------
-	-- FOOTER (dedicated full-width strip, pinned to the window bottom)
-	-- It is a sibling of the body, not a child of it, so it keeps a fixed
-	-- height and a stable position while the body/content flexes above it.
-	-- A 1px separator on its top edge cleanly divides body from footer, and
-	-- the window's rounded bottom corners are matched here.
+	-- FOOTER (Dedicated full-width strip with top separator)
 	--------------------------------------------------------------
 	local footerBar = create("Frame", {
 		Name = "Footer",
@@ -767,7 +696,6 @@ function RATAHUB:CreateWindow(cfg)
 		Parent = window,
 	})
 	corner(22, footerBar)
-	-- square off the TOP corners so only the bottom stays rounded
 	create("Frame", {
 		Size = UDim2.new(1, 0, 0, 22),
 		BackgroundColor3 = THEME.Sidebar,
@@ -776,7 +704,6 @@ function RATAHUB:CreateWindow(cfg)
 		ZIndex = 5,
 		Parent = footerBar,
 	})
-	-- the separator that divides the body from the footer
 	create("Frame", {
 		Name = "Separator",
 		Size = UDim2.new(1, 0, 0, 1),
@@ -788,7 +715,6 @@ function RATAHUB:CreateWindow(cfg)
 	})
 	padding(footerBar, nil, 16, 14, 0, 0)
 
-	-- left: brand + version
 	create("TextLabel", {
 		Name = "Brand",
 		AnchorPoint = Vector2.new(0, 0.5),
@@ -809,7 +735,7 @@ function RATAHUB:CreateWindow(cfg)
 		Position = UDim2.new(0, 74, 0.5, 0),
 		Size = UDim2.fromOffset(90, 14),
 		BackgroundTransparency = 1,
-		Text = cfg.Version or "v2.4.1",
+		Text = cfg.Version or "V5",
 		TextColor3 = THEME.Muted,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Font = FONT_MONO, TextSize = 11,
@@ -817,7 +743,6 @@ function RATAHUB:CreateWindow(cfg)
 		Parent = footerBar,
 	})
 
-	-- right: status pill (dot + label), right-aligned
 	local status = create("Frame", {
 		Name = "Status",
 		AnchorPoint = Vector2.new(1, 0.5),
@@ -851,14 +776,12 @@ function RATAHUB:CreateWindow(cfg)
 		Parent = status,
 	})
 
-	-- minimize collapses the body and footer together for a clean fold
 	minimizeBtn.MouseButton1Click:Connect(function()
 		minimized = not minimized
 		body.Visible = not minimized
 		footerBar.Visible = not minimized
 	end)
 
-	-- expose internals to tab builders
 	self._scroll = scroll
 	self._nav = nav
 	self._highlight = highlight
@@ -868,7 +791,6 @@ function RATAHUB:CreateWindow(cfg)
 	return self
 end
 
--- Switch active tab: page visibility, header text, nav colors, highlight.
 function Window:_select(id)
 	if self._activeTab == id then return end
 	self._activeTab = id
@@ -882,8 +804,6 @@ function Window:_select(id)
 		local active = (tid == id)
 		tween(nb.icon, HOVER, { TextColor3 = active and THEME.Primary or THEME.Muted })
 		tween(nb.label, HOVER, { TextColor3 = active and THEME.Foreground or THEME.Muted })
-		-- the active row is dressed by the sliding highlight, so clear any
-		-- lingering hover fill on it to avoid a doubled background.
 		if active then tween(nb.button, HOVER, { BackgroundTransparency = 1 }) end
 	end
 
@@ -912,7 +832,6 @@ function Window:CreateTab(cfg)
 	local index = 0
 	for _ in pairs(self.navButtons) do index += 1 end
 
-	-- nav button
 	local btn = create("TextButton", {
 		Name = id,
 		Position = UDim2.fromOffset(0, index * NAV_ITEM_H),
@@ -967,7 +886,6 @@ function Window:CreateTab(cfg)
 		end
 	end)
 
-	-- page (stacked; only active is visible)
 	local page = create("Frame", {
 		Name = id .. "_page",
 		Size = UDim2.new(1, 0, 0, 0),
@@ -995,20 +913,17 @@ function Window:CreateTab(cfg)
 
 	self.tabs[id] = tab
 
-	-- auto-select first tab
 	if index == 0 then
 		task.defer(function() self:_select(id) end)
 	end
 	return tab
 end
 
--- internal: next layout order
 function Tab:_next()
 	self._order += 1
 	return self._order
 end
 
--- internal: a card that grows with content
 function Tab:_card()
 	local c = create("Frame", {
 		LayoutOrder = self:_next(),
@@ -1043,7 +958,6 @@ function Tab:_cardOrder(card)
 	return o
 end
 
--- CreateSection: starts a new card with a section label
 function Tab:CreateSection(text)
 	local card = self:_card()
 	create("TextLabel", {
@@ -1060,12 +974,10 @@ function Tab:CreateSection(text)
 end
 
 --=====================================================================
--- CONTROL: DIVIDER (subtle hairline inside the current card)
+-- CONTROLS
 --=====================================================================
 function Tab:CreateDivider()
 	local card = self:_ensureCard()
-	-- A 1px line wrapped in a tiny container so the surrounding UIListLayout
-	-- padding stays consistent and the divider never adds large gaps.
 	local holder = create("Frame", {
 		LayoutOrder = self:_cardOrder(card),
 		Size = UDim2.new(1, 0, 0, 1),
@@ -1077,9 +989,6 @@ function Tab:CreateDivider()
 	return { Instance = holder }
 end
 
---=====================================================================
--- CONTROL: PARAGRAPH (title + wrapped multiline body, its own card)
---=====================================================================
 function Tab:CreateParagraph(cfg)
 	cfg = cfg or {}
 	local card = self:_card()
@@ -1108,8 +1017,6 @@ function Tab:CreateParagraph(cfg)
 		Parent = card,
 	})
 
-	-- Following controls should start their own card, not pile into the
-	-- paragraph card.
 	self._currentCard = nil
 
 	local handle = {}
@@ -1120,16 +1027,8 @@ function Tab:CreateParagraph(cfg)
 	return handle
 end
 
---=====================================================================
--- CONTROL: LABEL (lightweight, wraps, lives in the current card)
---=====================================================================
 function Tab:CreateLabel(cfg)
-	local text
-	if type(cfg) == "table" then
-		text = cfg.Text
-	else
-		text = cfg
-	end
+	local text = type(cfg) == "table" and cfg.Text or cfg
 	local card = self:_ensureCard()
 	local lbl = create("TextLabel", {
 		LayoutOrder = self:_cardOrder(card),
@@ -1150,9 +1049,6 @@ function Tab:CreateLabel(cfg)
 	return handle
 end
 
---=====================================================================
--- CONTROL: TOGGLE  (UIScale overshoot; no layout-size change)
---=====================================================================
 function Tab:CreateToggle(cfg)
 	cfg = cfg or {}
 	local card = self:_ensureCard()
@@ -1196,9 +1092,9 @@ function Tab:CreateToggle(cfg)
 		AutoButtonColor = false,
 		Parent = row,
 	})
-		corner(12, track)
-		local knob = create("Frame", {
-			AnchorPoint = Vector2.new(0, 0.5),
+	corner(12, track)
+	local knob = create("Frame", {
+		AnchorPoint = Vector2.new(0, 0.5),
 		Position = state and UDim2.new(1, -22, 0.5, 0) or UDim2.new(0, 2, 0.5, 0),
 		Size = UDim2.fromOffset(20, 20),
 		BackgroundColor3 = THEME.Foreground,
@@ -1215,7 +1111,6 @@ function Tab:CreateToggle(cfg)
 		tween(knob, animated and TOGGLE_KNOB or info,
 			{ Position = state and UDim2.new(1, -22, 0.5, 0) or UDim2.new(0, 2, 0.5, 0) })
 		if animated then
-			-- subtle scale pulse via UIScale (does not affect layout)
 			local up = tween(knobScale, PULSE_UP, { Scale = 1.14 })
 			up.Completed:Connect(function()
 				tween(knobScale, PULSE_DOWN, { Scale = 1 })
@@ -1232,15 +1127,11 @@ function Tab:CreateToggle(cfg)
 	function handle:Set(v)
 		state = v and true or false
 		apply(true)
-		if cfg.Callback then task.spawn(cfg.Callback, state) end
 	end
 	function handle:Get() return state end
 	return handle
 end
 
---=====================================================================
--- CONTROL: SLIDER
---=====================================================================
 function Tab:CreateSlider(cfg)
 	cfg = cfg or {}
 	local card = self:_ensureCard()
@@ -1248,7 +1139,18 @@ function Tab:CreateSlider(cfg)
 	local maxV = cfg.Range and cfg.Range[2] or 100
 	local inc = cfg.Increment or 1
 	local suffix = cfg.Suffix or ""
-	local value = clamp(cfg.CurrentValue or minV, minV, maxV)
+	local decimals = getDecimals(inc)
+
+	local function cleanRound(val)
+		local snapped = math.floor((val / inc) + 0.5) * inc
+		if decimals > 0 then
+			local factor = 10 ^ decimals
+			snapped = math.floor(snapped * factor + 0.5) / factor
+		end
+		return clamp(snapped, minV, maxV)
+	end
+
+	local value = cleanRound(cfg.CurrentValue or minV)
 
 	local row = create("Frame", {
 		LayoutOrder = self:_cardOrder(card),
@@ -1265,12 +1167,21 @@ function Tab:CreateSlider(cfg)
 		Font = FONT, TextSize = 14,
 		Parent = row,
 	})
+
+	local function formatVal(val)
+		if decimals > 0 then
+			return string.format("%." .. decimals .. "f", val)
+		else
+			return string.format("%d", math.floor(val + 0.5))
+		end
+	end
+
 	local valueLabel = create("TextLabel", {
 		AnchorPoint = Vector2.new(1, 0),
 		Position = UDim2.new(1, 0, 0, 0),
 		Size = UDim2.fromOffset(80, 16),
 		BackgroundTransparency = 1,
-		Text = tostring(value) .. suffix,
+		Text = formatVal(value) .. suffix,
 		TextColor3 = THEME.Primary,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		Font = FONT_MONO, TextSize = 13,
@@ -1313,12 +1224,13 @@ function Tab:CreateSlider(cfg)
 		local p = pct()
 		fill.Size = UDim2.fromScale(p, 1)
 		knob.Position = UDim2.new(p, 0, 0.5, 0)
-		valueLabel.Text = tostring(value) .. suffix
+		valueLabel.Text = formatVal(value) .. suffix
 	end
+
 	local function setFromX(px)
 		local rel = clamp((px - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
 		local raw = minV + rel * (maxV - minV)
-		value = clamp(math.floor((raw / inc) + 0.5) * inc, minV, maxV)
+		value = cleanRound(raw)
 		render()
 		if cfg.Callback then task.spawn(cfg.Callback, value) end
 	end
@@ -1349,19 +1261,13 @@ function Tab:CreateSlider(cfg)
 	end)
 
 	function handle:Set(v)
-		-- Respect Range and Increment exactly like a user drag would.
-		local raw = clamp(v, minV, maxV)
-		value = clamp(math.floor((raw / inc) + 0.5) * inc, minV, maxV)
+		value = cleanRound(v)
 		render()
-		if cfg.Callback then task.spawn(cfg.Callback, value) end
 	end
 	function handle:Get() return value end
 	return handle
 end
 
---=====================================================================
--- CONTROL: DROPDOWN (overlay list; never displaces siblings)
---=====================================================================
 function Tab:CreateDropdown(cfg)
 	cfg = cfg or {}
 	local card = self:_ensureCard()
@@ -1441,14 +1347,7 @@ function Tab:CreateDropdown(cfg)
 	corner(8, list)
 	stroke(list, 0.85)
 	padding(list, 4)
-	create("UIListLayout", {
-		Padding = UDim.new(0, 2),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-		Parent = list,
-	})
 
-	-- Long option lists remain usable: the visible list caps at 5 rows and
-	-- scrolls internally, so the overlay never grows past a sane height.
 	local inner = create("ScrollingFrame", {
 		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
@@ -1488,54 +1387,68 @@ function Tab:CreateDropdown(cfg)
 		if cfg.Callback then task.spawn(cfg.Callback, opt) end
 	end
 
-	for i, opt in ipairs(options) do
-		local item = create("TextButton", {
-			LayoutOrder = i,
-			Size = UDim2.new(1, 0, 0, 28),
-			BackgroundColor3 = THEME.Secondary,
-			BackgroundTransparency = 1,
-			Text = tostring(opt),
-			TextColor3 = THEME.Muted,
-			TextXAlignment = Enum.TextXAlignment.Left,
-			Font = FONT, TextSize = 13,
-			AutoButtonColor = false,
-			ZIndex = 22,
-			Parent = inner,
-		})
-		corner(6, item)
-		padding(item, nil, 10, 6, 0, 0)
-		item.MouseEnter:Connect(function()
-			tween(item, HOVER, { BackgroundTransparency = 0.85, TextColor3 = THEME.Foreground })
-		end)
-		item.MouseLeave:Connect(function()
-			tween(item, HOVER, { BackgroundTransparency = 1, TextColor3 = THEME.Muted })
-		end)
-		item.MouseButton1Click:Connect(function()
-			choose(opt)
-		end)
+	local function rebuildOptions()
+		for _, child in ipairs(inner:GetChildren()) do
+			if child:IsA("TextButton") then child:Destroy() end
+		end
+		listHeight = math.min(#options, 5) * 30 + 8
+		if open then
+			tween(list, DROP, { Size = UDim2.new(0.5, 0, 0, listHeight) })
+		end
+		for i, opt in ipairs(options) do
+			local item = create("TextButton", {
+				LayoutOrder = i,
+				Size = UDim2.new(1, 0, 0, 28),
+				BackgroundColor3 = THEME.Secondary,
+				BackgroundTransparency = 1,
+				Text = tostring(opt),
+				TextColor3 = THEME.Muted,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				Font = FONT, TextSize = 13,
+				AutoButtonColor = false,
+				ZIndex = 22,
+				Parent = inner,
+			})
+			corner(6, item)
+			padding(item, nil, 10, 6, 0, 0)
+			item.MouseEnter:Connect(function()
+				tween(item, HOVER, { BackgroundTransparency = 0.85, TextColor3 = THEME.Foreground })
+			end)
+			item.MouseLeave:Connect(function()
+				tween(item, HOVER, { BackgroundTransparency = 1, TextColor3 = THEME.Muted })
+			end)
+			item.MouseButton1Click:Connect(function()
+				choose(opt)
+			end)
+		end
 	end
+
+	rebuildOptions()
 
 	btn.MouseButton1Click:Connect(function()
 		setOpen(not open)
 	end)
 
+	function handle:Refresh(newOptions, resetSelection)
+		options = newOptions or {}
+		rebuildOptions()
+		if resetSelection or not table.find(options, current) then
+			choose(options[1] or "")
+		end
+	end
+
 	function handle:Set(v)
-		-- Guard against invalid values: only accept options that exist.
 		for _, o in ipairs(options) do
 			if o == v then
 				choose(v)
 				return
 			end
 		end
-		-- Unknown value: leave the current selection untouched.
 	end
 	function handle:Get() return current end
 	return handle
 end
 
---=====================================================================
--- CONTROL: KEYBIND (generic; click -> "Press a key..." -> capture)
---=====================================================================
 function Tab:CreateKeybind(cfg)
 	cfg = cfg or {}
 	local card = self:_ensureCard()
@@ -1590,11 +1503,9 @@ function Tab:CreateKeybind(cfg)
 		btn.TextColor3 = THEME.PrimaryText
 
 		captureConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-			-- ignore GUI-directed input like the click that opened this
 			if gameProcessed then return end
 
 			if input.KeyCode == Enum.KeyCode.Escape then
-				-- cancel: restore previous key
 				stopListening()
 				btn.Text = tostring(currentKey)
 				tween(btn, HOVER, { BackgroundColor3 = THEME.Secondary })
@@ -1614,7 +1525,6 @@ function Tab:CreateKeybind(cfg)
 	end)
 
 	function handle:Set(keyName)
-		-- Accept a KeyCode enum or a plain name string.
 		if typeof(keyName) == "EnumItem" then
 			keyName = keyName.Name
 		end
@@ -1625,9 +1535,6 @@ function Tab:CreateKeybind(cfg)
 	return handle
 end
 
---=====================================================================
--- CONTROL: BUTTON  (UIScale press feedback)
---=====================================================================
 function Tab:CreateButton(cfg)
 	cfg = cfg or {}
 	local card = self:_ensureCard()
@@ -1668,9 +1575,6 @@ function Tab:CreateButton(cfg)
 	return handle
 end
 
---=====================================================================
--- CONTROL: INPUT (single-line text box; label above)
---=====================================================================
 function Tab:CreateInput(cfg)
 	cfg = cfg or {}
 	local card = self:_ensureCard()
@@ -1723,15 +1627,11 @@ function Tab:CreateInput(cfg)
 	function handle:Set(v)
 		value = tostring(v)
 		box.Text = value
-		if cfg.Callback then task.spawn(cfg.Callback, value) end
 	end
 	function handle:Get() return box.Text end
 	return handle
 end
 
---=====================================================================
--- CONTROL: COLOR PICKER (HSV square + hue bar; pure Roblox instances)
---=====================================================================
 function Tab:CreateColorPicker(cfg)
 	cfg = cfg or {}
 	local card = self:_ensureCard()
@@ -1772,11 +1672,10 @@ function Tab:CreateColorPicker(cfg)
 	corner(6, preview)
 	stroke(preview, 0.6)
 
-	-- Overlay panel (animates open/closed; never displaces siblings).
 	local PANEL_W = 208
 	local SV_W, SV_H = 188, 120
 	local HUE_H = 14
-	local PANEL_H = SV_H + 10 + HUE_H + 20 -- + top/bottom padding (10 each)
+	local PANEL_H = SV_H + 10 + HUE_H + 20
 
 	local panel = create("Frame", {
 		AnchorPoint = Vector2.new(1, 0),
@@ -1793,7 +1692,6 @@ function Tab:CreateColorPicker(cfg)
 	stroke(panel, 0.85)
 	padding(panel, 10)
 
-	-- Saturation / Value square.
 	local sv = create("Frame", {
 		Position = UDim2.fromOffset(0, 0),
 		Size = UDim2.fromOffset(SV_W, SV_H),
@@ -1804,7 +1702,6 @@ function Tab:CreateColorPicker(cfg)
 		Parent = panel,
 	})
 	corner(6, sv)
-	-- white gradient (left = white -> right = transparent, revealing hue)
 	local whiteOverlay = create("Frame", {
 		Size = UDim2.fromScale(1, 1),
 		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
@@ -1819,7 +1716,6 @@ function Tab:CreateColorPicker(cfg)
 		}),
 		Parent = whiteOverlay,
 	})
-	-- black gradient (top = transparent -> bottom = black)
 	local blackOverlay = create("Frame", {
 		Size = UDim2.fromScale(1, 1),
 		BackgroundColor3 = Color3.fromRGB(0, 0, 0),
@@ -1846,7 +1742,6 @@ function Tab:CreateColorPicker(cfg)
 	})
 	corner(5, svDot)
 	stroke(svDot, 0.1, Color3.fromRGB(0, 0, 0))
-	-- transparent interaction surface over the square
 	local svBtn = create("TextButton", {
 		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
@@ -1856,7 +1751,6 @@ function Tab:CreateColorPicker(cfg)
 		Parent = sv,
 	})
 
-	-- Hue bar.
 	local hueBar = create("Frame", {
 		Position = UDim2.fromOffset(0, SV_H + 10),
 		Size = UDim2.fromOffset(SV_W, HUE_H),
@@ -1910,9 +1804,6 @@ function Tab:CreateColorPicker(cfg)
 		if fireCallback and cfg.Callback then task.spawn(cfg.Callback, col) end
 	end
 
-	-- Reusable drag capture: fires onMove for the initial press and every
-	-- subsequent move, then cleans up both connections on release so there
-	-- are never leftover input connections.
 	local function bindDrag(surface, onMove)
 		surface.InputBegan:Connect(function(input)
 			if input.UserInputType ~= Enum.UserInputType.MouseButton1
@@ -1978,12 +1869,6 @@ end
 
 --=====================================================================
 -- RAYFIELD COMPATIBILITY ADAPTER
---
--- Lets existing RATAHUB / Rayfield-style code keep calling
--- Tab:CreateToggle{...}, :CreateSlider{...}, etc. with minimal changes.
--- The adapter only forwards config + callbacks into the real UI controls;
--- gameplay logic stays inside the Callback and never touches the UI.
--- Implemented independently (no Rayfield source is copied).
 --=====================================================================
 local RATAHUBAdapter = {}
 RATAHUBAdapter.__index = RATAHUBAdapter
@@ -1993,7 +1878,6 @@ function RATAHUBAdapter.wrap(window)
 end
 
 function RATAHUBAdapter:CreateWindow(_)
-	-- Rayfield returns a window; here the window already exists.
 	return self
 end
 
@@ -2001,12 +1885,8 @@ function RATAHUBAdapter:CreateTab(name, icon)
 	local tab = self._window:CreateTab({ Name = name, Icon = icon, SubTitle = name })
 	return setmetatable({ _tab = tab }, {
 		__index = {
-			CreateSection = function(_, t)
-				return tab:CreateSection(t)
-			end,
-			CreateDivider = function(_)
-				return tab:CreateDivider()
-			end,
+			CreateSection = function(_, t) return tab:CreateSection(t) end,
+			CreateDivider = function(_) return tab:CreateDivider() end,
 			CreateParagraph = function(_, c)
 				c = c or {}
 				return tab:CreateParagraph({ Title = c.Title, Content = c.Content })
@@ -2071,31 +1951,8 @@ function RATAHUBAdapter:Notify(cfg)
 end
 
 --=====================================================================
--- CONFIG / STATE  (Phase 1 — single source of truth for Main + Extras)
---
---   Data flow:   UI  ->  Callback  ->  Config / State  ->  Feature module
---
--- * Config     every user-facing VALUE. One source of truth, nothing else
---              stores control state.
--- * Runtime    transient objects only (connections, BodyMovers, cached
---              parts). Never a source of truth; never placed in Config.
--- * Features   pure logic modules. They read Config and act on the LOCAL
---              client. They never build or touch the UI.
--- * Controls   registry of the control handles returned by the UI, so any
---              module (or a later phase) can call handle:Set()/:Get() and
---              keep the UI and Config synchronized.
---
--- Only legitimate, local-client functionality is implemented. Features whose
--- purpose is to manipulate other players or grant an unfair multiplayer
--- advantage (hitbox expander, x-ray, btools) intentionally keep ONLY their
--- UI + Config + callback wiring — no such behaviour is implemented or faked.
+-- CONFIG / CENTRAL STATE
 --=====================================================================
-local RunService      = game:GetService("RunService")
-local TeleportService = game:GetService("TeleportService")
-local HttpService     = game:GetService("HttpService")
-local VirtualUser     = game:GetService("VirtualUser")
-local Lighting        = game:GetService("Lighting")
-
 local DEFAULT_GRAVITY = 196.2
 local DEFAULT_FOV     = 70
 
@@ -2113,12 +1970,14 @@ local Config = {
 			GravityEnabled = false,
 			Gravity = 196.2,
 			InfiniteJump = false,
+			InfiniteJumpKeybind = "J",
 			Noclip = false,
+			NoclipKeybind = "N",
 		},
 		Player = {
 			HitboxExpander = false,
 			HitboxSize = 5,
-			HitboxWhitelistMode = false,
+			HitboxWhitelistMode = "Disabled",
 			HitboxTarget = "Nadie",
 		},
 		Utility = {
@@ -2126,12 +1985,16 @@ local Config = {
 			AntiAFK = false,
 		},
 	},
+	ESP = {},
+	Aimlock = {},
+	Triggerbot = {},
 	Extras = {
 		Camera = {
 			UnlockMaxDistance = false,
 			FOVChanger = false,
 			FOV = 70,
 			Freecam = false,
+			FreecamSpeed = 10,
 		},
 		Vision = {
 			XRay = false,
@@ -2145,16 +2008,24 @@ local Config = {
 			AntiFling = false,
 		},
 	},
+	Troll = {},
+	Sounds = {},
 }
 
--- Clean public accessor for later phases. One source of truth, no loose globals.
 function RATAHUB:GetConfig() return Config end
 
--- Registry of live control handles (populated as the UI is built below).
-local Controls = { Main = {}, Extras = {} }
+local Controls = {
+	Main = {},
+	ESP = {},
+	Aimlock = {},
+	Triggerbot = {},
+	Extras = {},
+	Troll = {},
+	Sounds = {},
+}
 function RATAHUB:GetControls() return Controls end
 
--- Transient runtime state (connections / body movers / caches). NEVER in Config.
+-- Transient runtime state
 local Runtime = {
 	Fly          = { active = false, bv = nil, bg = nil, loop = nil, animate = nil },
 	WalkSpeed    = { active = false, loop = nil, original = nil },
@@ -2167,14 +2038,16 @@ local Runtime = {
 	Camera       = {
 		fovLoop = nil, savedFOV = nil, savedMaxZoom = nil,
 		freecamLoop = nil, freecamBegan = nil, freecamEnded = nil,
-		savedType = nil, keys = {},
+		savedType = nil, savedSubject = nil, wasAnchored = false, keys = {},
 	},
-	Performance  = { antiFlingConn = nil, savedLighting = nil },
+	Vision       = { xrayCache = {} },
+	Tools        = { btoolsList = {} },
+	Performance  = { antiFlingConn = nil, savedLighting = nil, savedParticles = {} },
 	Hotkeys      = { conn = nil },
 }
 
 --=====================================================================
--- FEATURE MODULES (read Config, act locally; no UI dependencies)
+-- FEATURE MODULES
 --=====================================================================
 local Features = {}
 
@@ -2244,13 +2117,16 @@ function Features.StartFly()
 end
 
 function Features.ToggleFly()
-	if not Config.Main.Movement.Fly then return end
-	if Runtime.Fly.active then
-		Features.StopFly()
-		RATAHUB:Notify({ Title = "Fly", Content = "Desactivado", Duration = 1.2 })
-	else
+	Config.Main.Movement.Fly = not Config.Main.Movement.Fly
+	if Controls.Main.Fly then
+		Controls.Main.Fly:Set(Config.Main.Movement.Fly)
+	end
+	if Config.Main.Movement.Fly then
 		Features.StartFly()
 		RATAHUB:Notify({ Title = "Fly", Content = "Activado", Duration = 1.2 })
+	else
+		Features.StopFly()
+		RATAHUB:Notify({ Title = "Fly", Content = "Desactivado", Duration = 1.2 })
 	end
 end
 
@@ -2276,6 +2152,11 @@ end
 function Features.ToggleWalkSpeed()
 	if not Config.Main.Movement.WalkSpeedEnabled then return end
 	Runtime.WalkSpeed.active = not Runtime.WalkSpeed.active
+	RATAHUB:Notify({
+		Title = "WalkSpeed",
+		Content = Runtime.WalkSpeed.active and "Activado" or "Desactivado",
+		Duration = 1.2
+	})
 end
 
 ------------------------------------------------------------- Movement: JumpPower
@@ -2335,6 +2216,19 @@ function Features.SetInfiniteJump(enabled)
 	end
 end
 
+function Features.ToggleInfiniteJump()
+	Config.Main.Movement.InfiniteJump = not Config.Main.Movement.InfiniteJump
+	Features.SetInfiniteJump(Config.Main.Movement.InfiniteJump)
+	if Controls.Main.InfiniteJump then
+		Controls.Main.InfiniteJump:Set(Config.Main.Movement.InfiniteJump)
+	end
+	RATAHUB:Notify({
+		Title = "Infinite Jump",
+		Content = Config.Main.Movement.InfiniteJump and "Activado" or "Desactivado",
+		Duration = 1.2
+	})
+end
+
 ------------------------------------------------------------- Movement: Noclip
 function Features.StopNoclip()
 	if Runtime.Noclip.stepConn then Runtime.Noclip.stepConn:Disconnect() Runtime.Noclip.stepConn = nil end
@@ -2369,6 +2263,23 @@ function Features.StartNoclip()
 			end
 		end
 	end)
+end
+
+function Features.ToggleNoclip()
+	Config.Main.Movement.Noclip = not Config.Main.Movement.Noclip
+	if Config.Main.Movement.Noclip then
+		Features.StartNoclip()
+	else
+		Features.StopNoclip()
+	end
+	if Controls.Main.Noclip then
+		Controls.Main.Noclip:Set(Config.Main.Movement.Noclip)
+	end
+	RATAHUB:Notify({
+		Title = "No Clip",
+		Content = Config.Main.Movement.Noclip and "Activado" or "Desactivado",
+		Duration = 1.2
+	})
 end
 
 ------------------------------------------------------------- Player: Reset
@@ -2427,7 +2338,7 @@ function Features.Rejoin()
 	TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player)
 end
 
-------------------------------------------------------------- Extras: Camera
+------------------------------------------------------------- Extras: Camera & Freecam
 function Features.SetUnlockMaxDistance(enabled)
 	if enabled then
 		Runtime.Camera.savedMaxZoom = Runtime.Camera.savedMaxZoom or player.CameraMaxZoomDistance
@@ -2458,16 +2369,32 @@ function Features.StartFreecam()
 	if Runtime.Camera.freecamLoop then return end
 	local cam = workspace.CurrentCamera
 	if not cam then return end
+
+	local root = getRoot()
+	if root then
+		Runtime.Camera.wasAnchored = root.Anchored
+		root.Anchored = true
+	end
+
 	Runtime.Camera.savedType = cam.CameraType
+	Runtime.Camera.savedSubject = cam.CameraSubject
 	cam.CameraType = Enum.CameraType.Scriptable
+
 	local keys = Runtime.Camera.keys
+	table.clear(keys)
+
 	Runtime.Camera.freecamBegan = UserInputService.InputBegan:Connect(function(input, gp)
 		if gp then return end
-		keys[input.KeyCode] = true
+		if input.UserInputType == Enum.UserInputType.Keyboard then
+			keys[input.KeyCode] = true
+		end
 	end)
 	Runtime.Camera.freecamEnded = UserInputService.InputEnded:Connect(function(input)
-		keys[input.KeyCode] = nil
+		if input.UserInputType == Enum.UserInputType.Keyboard then
+			keys[input.KeyCode] = nil
+		end
 	end)
+
 	Runtime.Camera.freecamLoop = RunService.RenderStepped:Connect(function(dt)
 		local c = workspace.CurrentCamera
 		if not c then return end
@@ -2478,7 +2405,9 @@ function Features.StartFreecam()
 		if keys[Enum.KeyCode.D] then move += Vector3.new(1, 0, 0) end
 		if keys[Enum.KeyCode.E] then move += Vector3.new(0, 1, 0) end
 		if keys[Enum.KeyCode.Q] then move += Vector3.new(0, -1, 0) end
-		local speed = (keys[Enum.KeyCode.LeftShift] and 120 or 60) * dt
+
+		local speedMultiplier = Config.Extras.Camera.FreecamSpeed or 10
+		local speed = (keys[Enum.KeyCode.LeftShift] and (speedMultiplier * 5) or (speedMultiplier * 2)) * dt * 10
 		c.CFrame = c.CFrame * CFrame.new(move * speed)
 	end)
 end
@@ -2488,15 +2417,61 @@ function Features.StopFreecam()
 	if Runtime.Camera.freecamBegan then Runtime.Camera.freecamBegan:Disconnect() Runtime.Camera.freecamBegan = nil end
 	if Runtime.Camera.freecamEnded then Runtime.Camera.freecamEnded:Disconnect() Runtime.Camera.freecamEnded = nil end
 	table.clear(Runtime.Camera.keys)
+
+	local root = getRoot()
+	if root then
+		root.Anchored = Runtime.Camera.wasAnchored or false
+	end
+
 	local cam = workspace.CurrentCamera
-	if cam and Runtime.Camera.savedType then cam.CameraType = Runtime.Camera.savedType end
+	if cam then
+		cam.CameraType = Runtime.Camera.savedType or Enum.CameraType.Custom
+		if Runtime.Camera.savedSubject then
+			cam.CameraSubject = Runtime.Camera.savedSubject
+		else
+			local hum = getHumanoid()
+			if hum then cam.CameraSubject = hum end
+		end
+	end
 end
 
 function Features.SetFreecam(enabled)
-	if enabled then Features.StartFreecam() else Features.StopFreecam() end
+	if enabled then
+		Features.StartFreecam()
+		RATAHUB:Notify({ Title = "Freecam", Content = "Activado (Personaje bloqueado)", Duration = 1.5 })
+	else
+		Features.StopFreecam()
+		RATAHUB:Notify({ Title = "Freecam", Content = "Desactivado (Cámara restaurada)", Duration = 1.5 })
+	end
 end
 
-------------------------------------------------------------- Extras: Tools
+------------------------------------------------------------- Extras: Vision (X-Ray)
+function Features.SetXRay(enabled)
+	if enabled then
+		Runtime.Vision.xrayCache = Runtime.Vision.xrayCache or {}
+		for _, obj in ipairs(workspace:GetDescendants()) do
+			if obj:IsA("BasePart") and not (player.Character and obj:IsDescendantOf(player.Character)) then
+				if obj.Transparency < 0.5 then
+					Runtime.Vision.xrayCache[obj] = obj.Transparency
+					obj.Transparency = 0.65
+				end
+			end
+		end
+		RATAHUB:Notify({ Title = "X-Ray", Content = "Activado", Duration = 1.2 })
+	else
+		if Runtime.Vision.xrayCache then
+			for part, origTrans in pairs(Runtime.Vision.xrayCache) do
+				if part and part.Parent then
+					part.Transparency = origTrans
+				end
+			end
+			table.clear(Runtime.Vision.xrayCache)
+		end
+		RATAHUB:Notify({ Title = "X-Ray", Content = "Desactivado", Duration = 1.2 })
+	end
+end
+
+------------------------------------------------------------- Extras: Tools (Click TP / BTools)
 function Features.SetClickTP(enabled)
 	if enabled then
 		if Runtime.ClickTP.conn then return end
@@ -2508,12 +2483,44 @@ function Features.SetClickTP(enabled)
 				root.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0))
 			end
 		end)
+		RATAHUB:Notify({ Title = "Click TP", Content = "Activado (Haz clic para teletransportar)", Duration = 1.5 })
 	else
-		if Runtime.ClickTP.conn then Runtime.ClickTP.conn:Disconnect() Runtime.ClickTP.conn = nil end
+		if Runtime.ClickTP.conn then
+			Runtime.ClickTP.conn:Disconnect()
+			Runtime.ClickTP.conn = nil
+		end
+		RATAHUB:Notify({ Title = "Click TP", Content = "Desactivado", Duration = 1.2 })
 	end
 end
 
-------------------------------------------------------------- Extras: Performance
+function Features.SetBTools(enabled)
+	if enabled then
+		local backpack = player:FindFirstChildOfClass("Backpack")
+		if backpack then
+			Runtime.Tools.btoolsList = Runtime.Tools.btoolsList or {}
+			local binTypes = { Enum.BinType.Grab, Enum.BinType.Clone, Enum.BinType.Hammer }
+			for _, bType in ipairs(binTypes) do
+				local ok, bin = pcall(function() return Instance.new("HopperBin") end)
+				if ok and bin then
+					bin.BinType = bType
+					bin.Parent = backpack
+					table.insert(Runtime.Tools.btoolsList, bin)
+				end
+			end
+		end
+		RATAHUB:Notify({ Title = "BTools", Content = "Equipados en la mochila", Duration = 1.5 })
+	else
+		if Runtime.Tools.btoolsList then
+			for _, bin in ipairs(Runtime.Tools.btoolsList) do
+				if bin and bin.Parent then bin:Destroy() end
+			end
+			table.clear(Runtime.Tools.btoolsList)
+		end
+		RATAHUB:Notify({ Title = "BTools", Content = "Desactivados", Duration = 1.2 })
+	end
+end
+
+------------------------------------------------------------- Extras: Performance (FPS Boost / Anti-Fling)
 function Features.SetFPSBoost(enabled)
 	if enabled then
 		pcall(function()
@@ -2521,26 +2528,38 @@ function Features.SetFPSBoost(enabled)
 				GlobalShadows = Lighting.GlobalShadows,
 				FogEnd = Lighting.FogEnd,
 			}
+			Runtime.Performance.savedParticles = Runtime.Performance.savedParticles or {}
 			Lighting.GlobalShadows = false
 			Lighting.FogEnd = 9e9
 			for _, obj in ipairs(workspace:GetDescendants()) do
 				if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Smoke")
 					or obj:IsA("Fire") or obj:IsA("Sparkles") then
-					obj.Enabled = false
-				elseif obj:IsA("BasePart") then
-					obj.Material = Enum.Material.Plastic
-					obj.Reflectance = 0
+					if obj.Enabled then
+						Runtime.Performance.savedParticles[obj] = true
+						obj.Enabled = false
+					end
 				end
 			end
 		end)
+		RATAHUB:Notify({ Title = "FPS Boost", Content = "Activado", Duration = 1.5 })
 	else
 		pcall(function()
 			local s = Runtime.Performance.savedLighting
 			if s then
 				Lighting.GlobalShadows = s.GlobalShadows
 				Lighting.FogEnd = s.FogEnd
+				Runtime.Performance.savedLighting = nil
+			end
+			if Runtime.Performance.savedParticles then
+				for obj, wasEnabled in pairs(Runtime.Performance.savedParticles) do
+					if obj and obj.Parent and wasEnabled then
+						obj.Enabled = true
+					end
+				end
+				table.clear(Runtime.Performance.savedParticles)
 			end
 		end)
+		RATAHUB:Notify({ Title = "FPS Boost", Content = "Desactivado", Duration = 1.2 })
 	end
 end
 
@@ -2559,19 +2578,17 @@ function Features.SetAntiFling(enabled)
 				end
 			end
 		end)
+		RATAHUB:Notify({ Title = "Anti-Fling", Content = "Activado", Duration = 1.2 })
 	else
 		if Runtime.Performance.antiFlingConn then
 			Runtime.Performance.antiFlingConn:Disconnect()
 			Runtime.Performance.antiFlingConn = nil
 		end
+		RATAHUB:Notify({ Title = "Anti-Fling", Content = "Desactivado", Duration = 1.2 })
 	end
 end
 
-------------------------------------------------------------- Runtime hotkeys (Fly / WalkSpeed)
--- The UI keybind control only REBINDS a key (its callback fires when a new key
--- is captured). Actual in-game hotkey triggering is a feature concern, handled
--- here with a single event-driven listener that reads the keybinds from Config.
--- This adds no polling and does not touch the UI framework.
+------------------------------------------------------------- Runtime hotkeys listener
 function Features.StartHotkeys()
 	if Runtime.Hotkeys.conn then return end
 	Runtime.Hotkeys.conn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -2582,6 +2599,10 @@ function Features.StartHotkeys()
 			Features.ToggleFly()
 		elseif name == Config.Main.Movement.WalkSpeedKeybind then
 			Features.ToggleWalkSpeed()
+		elseif name == Config.Main.Movement.InfiniteJumpKeybind then
+			Features.ToggleInfiniteJump()
+		elseif name == Config.Main.Movement.NoclipKeybind then
+			Features.ToggleNoclip()
 		end
 	end)
 end
@@ -2589,17 +2610,24 @@ end
 RATAHUB.Features = Features
 
 --=====================================================================
--- RATAHUB V5 layout: 7 tabs (Main / ESP / Aimlock / Triggerbot / Extras /
--- Troll / Sounds) built through the API.
---
--- PHASE 1 wires Main and Extras through Config / State / Feature modules
--- (UI -> Callback -> Config -> Feature). The remaining five tabs keep their
--- empty future-connection callbacks and are untouched by this phase.
+-- DYNAMIC PLAYER LIST HELPERS
+--=====================================================================
+local function getPlayerList()
+	local list = { "Nadie" }
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player then
+			table.insert(list, p.Name)
+		end
+	end
+	return list
+end
+
+--=====================================================================
+-- BUILD RATAHUB V5 UI (7 TABS)
 --=====================================================================
 local win = RATAHUB:CreateWindow({ Title = "RATAHUB", SubTitle = "V5", Version = "V5" })
 
--- Placeholder option lists (populated with real players / teams later).
-local WHITELIST_TARGETS = { "Nadie" }
+local WHITELIST_TARGETS = getPlayerList()
 local IGNORE_TEAMS = { "Ninguno" }
 local SOUND_LIST = {
 	"Skeet / Gamesense",
@@ -2611,468 +2639,471 @@ local SOUND_LIST = {
 	"CS:GO Headshot",
 }
 
-do -- 1. MAIN  (Phase 1 — wired: UI -> Callback -> Config -> Feature)
+--------------------------------------------------------------
+-- 1. MAIN TAB
+--------------------------------------------------------------
+do
 	local main = win:CreateTab({ Name = "Main", Icon = "◆", SubTitle = "Movement, player and utility" })
 	local M = Config.Main
 
 	main:CreateSection("Movement")
-	-- Toggle enables Fly; the keybind (handled by Features.StartHotkeys) actually
-	-- activates/deactivates it in-game.
-	Controls.Main.Fly = main:CreateToggle({ Name = "Fly", CurrentValue = M.Movement.Fly,
+
+	Controls.Main.Fly = main:CreateToggle({
+		Name = "Fly",
+		CurrentValue = M.Movement.Fly,
 		Callback = function(Value)
 			M.Movement.Fly = Value
-			if not Value then Features.StopFly() end
-		end })
-	Controls.Main.FlyKeybind = main:CreateKeybind({ Name = "Fly Keybind", CurrentKeybind = M.Movement.FlyKeybind,
+			if Value then Features.StartFly() else Features.StopFly() end
+		end,
+	})
+	Controls.Main.FlyKeybind = main:CreateKeybind({
+		Name = "Fly Keybind",
+		CurrentKeybind = M.Movement.FlyKeybind,
 		Callback = function(Key)
 			M.Movement.FlyKeybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
-		end })
-	Controls.Main.FlySpeed = main:CreateSlider({ Name = "Fly Speed", Range = { 50, 600 }, Increment = 5, CurrentValue = M.Movement.FlySpeed,
+		end,
+	})
+	Controls.Main.FlySpeed = main:CreateSlider({
+		Name = "Fly Speed",
+		Range = { 50, 600 },
+		Increment = 5,
+		CurrentValue = M.Movement.FlySpeed,
 		Callback = function(Value)
 			M.Movement.FlySpeed = Value
-		end })
-	Controls.Main.WalkSpeed = main:CreateToggle({ Name = "WalkSpeed", CurrentValue = M.Movement.WalkSpeedEnabled,
+		end,
+	})
+
+	Controls.Main.WalkSpeed = main:CreateToggle({
+		Name = "WalkSpeed",
+		CurrentValue = M.Movement.WalkSpeedEnabled,
 		Callback = function(Value)
 			M.Movement.WalkSpeedEnabled = Value
 			if Value then
+				Runtime.WalkSpeed.active = true
 				Features.StartWalkSpeed()
 			else
 				Runtime.WalkSpeed.active = false
 				Features.StopWalkSpeed()
 			end
-		end })
-	Controls.Main.WalkSpeedKeybind = main:CreateKeybind({ Name = "WalkSpeed Keybind", CurrentKeybind = M.Movement.WalkSpeedKeybind,
+		end,
+	})
+	Controls.Main.WalkSpeedKeybind = main:CreateKeybind({
+		Name = "WalkSpeed Keybind",
+		CurrentKeybind = M.Movement.WalkSpeedKeybind,
 		Callback = function(Key)
 			M.Movement.WalkSpeedKeybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
-		end })
-	Controls.Main.WalkSpeedValue = main:CreateSlider({ Name = "WalkSpeed", Range = { 16, 300 }, Increment = 1, CurrentValue = M.Movement.WalkSpeed,
+		end,
+	})
+	Controls.Main.WalkSpeedValue = main:CreateSlider({
+		Name = "WalkSpeed",
+		Range = { 16, 300 },
+		Increment = 1,
+		CurrentValue = M.Movement.WalkSpeed,
 		Callback = function(Value)
 			M.Movement.WalkSpeed = Value
-		end })
-	Controls.Main.JumpPower = main:CreateToggle({ Name = "JumpPower", CurrentValue = M.Movement.JumpPowerEnabled,
+		end,
+	})
+
+	Controls.Main.JumpPower = main:CreateToggle({
+		Name = "JumpPower",
+		CurrentValue = M.Movement.JumpPowerEnabled,
 		Callback = function(Value)
 			M.Movement.JumpPowerEnabled = Value
 			if Value then Features.StartJumpPower() else Features.StopJumpPower() end
-		end })
-	Controls.Main.JumpPowerValue = main:CreateSlider({ Name = "JumpPower", Range = { 50, 300 }, Increment = 1, CurrentValue = M.Movement.JumpPower,
+		end,
+	})
+	Controls.Main.JumpPowerValue = main:CreateSlider({
+		Name = "JumpPower",
+		Range = { 50, 300 },
+		Increment = 1,
+		CurrentValue = M.Movement.JumpPower,
 		Callback = function(Value)
 			M.Movement.JumpPower = Value
-		end })
-	Controls.Main.Gravity = main:CreateToggle({ Name = "Gravity", CurrentValue = M.Movement.GravityEnabled,
+		end,
+	})
+
+	Controls.Main.Gravity = main:CreateToggle({
+		Name = "Gravity",
+		CurrentValue = M.Movement.GravityEnabled,
 		Callback = function(Value)
 			M.Movement.GravityEnabled = Value
 			if Value then Features.StartGravity() else Features.StopGravity() end
-		end })
-	Controls.Main.GravityValue = main:CreateSlider({ Name = "Gravity", Range = { 0, 196.2 }, Increment = 0.1, CurrentValue = M.Movement.Gravity,
+		end,
+	})
+	Controls.Main.GravityValue = main:CreateSlider({
+		Name = "Gravity",
+		Range = { 0, 196.2 },
+		Increment = 0.1,
+		CurrentValue = M.Movement.Gravity,
 		Callback = function(Value)
 			M.Movement.Gravity = Value
-		end })
-	Controls.Main.InfiniteJump = main:CreateToggle({ Name = "Infinite Jump", CurrentValue = M.Movement.InfiniteJump,
+		end,
+	})
+
+	Controls.Main.InfiniteJump = main:CreateToggle({
+		Name = "Infinite Jump",
+		CurrentValue = M.Movement.InfiniteJump,
 		Callback = function(Value)
 			M.Movement.InfiniteJump = Value
 			Features.SetInfiniteJump(Value)
-		end })
-	Controls.Main.Noclip = main:CreateToggle({ Name = "Noclip", CurrentValue = M.Movement.Noclip,
+		end,
+	})
+	Controls.Main.InfiniteJumpKeybind = main:CreateKeybind({
+		Name = "Infinite Jump Keybind",
+		CurrentKeybind = M.Movement.InfiniteJumpKeybind,
+		Callback = function(Key)
+			M.Movement.InfiniteJumpKeybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
+		end,
+	})
+
+	Controls.Main.Noclip = main:CreateToggle({
+		Name = "No Clip",
+		CurrentValue = M.Movement.Noclip,
 		Callback = function(Value)
 			M.Movement.Noclip = Value
 			if Value then Features.StartNoclip() else Features.StopNoclip() end
-		end })
+		end,
+	})
+	Controls.Main.NoclipKeybind = main:CreateKeybind({
+		Name = "No Clip Keybind",
+		CurrentKeybind = M.Movement.NoclipKeybind,
+		Callback = function(Key)
+			M.Movement.NoclipKeybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
+		end,
+	})
 
 	main:CreateSection("Player")
-	Controls.Main.Reset = main:CreateButton({ Name = "Reset Personaje (Desbuguear / Respawn)", Callback = function()
-		Features.ResetCharacter()
-	end })
-	-- Hitbox tools would alter OTHER players' characters (unfair multiplayer
-	-- advantage): UI + Config + callback wiring only, no behaviour implemented.
-	Controls.Main.HitboxExpander = main:CreateToggle({ Name = "Hitbox Expander", CurrentValue = M.Player.HitboxExpander,
+	Controls.Main.Reset = main:CreateButton({
+		Name = "Reset Personaje (Desbuguear / Respawn)",
+		Callback = function()
+			Features.ResetCharacter()
+		end,
+	})
+	Controls.Main.HitboxExpander = main:CreateToggle({
+		Name = "Hitbox Expander",
+		CurrentValue = M.Player.HitboxExpander,
 		Callback = function(Value)
 			M.Player.HitboxExpander = Value
-		end })
-	Controls.Main.HitboxSize = main:CreateSlider({ Name = "Hitbox Size", Range = { 1, 30 }, Increment = 1, CurrentValue = M.Player.HitboxSize,
+		end,
+	})
+	Controls.Main.HitboxSize = main:CreateSlider({
+		Name = "Hitbox Size",
+		Range = { 1, 30 },
+		Increment = 1,
+		CurrentValue = M.Player.HitboxSize,
 		Callback = function(Value)
 			M.Player.HitboxSize = Value
-		end })
-	Controls.Main.HitboxWhitelistMode = main:CreateToggle({ Name = "Hitbox Whitelist Mode", CurrentValue = M.Player.HitboxWhitelistMode,
+		end,
+	})
+	Controls.Main.HitboxWhitelistMode = main:CreateDropdown({
+		Name = "Hitbox Whitelist Mode",
+		Options = { "Disabled", "Ignore Whitelist", "Only Whitelist" },
+		CurrentOption = M.Player.HitboxWhitelistMode,
 		Callback = function(Value)
 			M.Player.HitboxWhitelistMode = Value
-		end })
-	Controls.Main.HitboxTarget = main:CreateDropdown({ Name = "Seleccionar Objetivo Whitelist", Options = WHITELIST_TARGETS, CurrentOption = M.Player.HitboxTarget,
+		end,
+	})
+	Controls.Main.HitboxTarget = main:CreateDropdown({
+		Name = "Seleccionar Objetivo Whitelist",
+		Options = WHITELIST_TARGETS,
+		CurrentOption = M.Player.HitboxTarget,
 		Callback = function(Value)
 			M.Player.HitboxTarget = Value
-		end })
+		end,
+	})
 
 	main:CreateSection("Utility")
-	Controls.Main.TargetServerPlayers = main:CreateSlider({ Name = "Target Server Players", Range = { 1, 10 }, Increment = 1, CurrentValue = M.Utility.TargetServerPlayers,
+	Controls.Main.TargetServerPlayers = main:CreateSlider({
+		Name = "Target Server Players",
+		Range = { 1, 10 },
+		Increment = 1,
+		CurrentValue = M.Utility.TargetServerPlayers,
 		Callback = function(Value)
 			M.Utility.TargetServerPlayers = Value
-		end })
-	Controls.Main.JoinServer = main:CreateButton({ Name = "Unirse a Servidor con esa Cantidad", Callback = function()
-		Features.ServerHop()
-	end })
-	Controls.Main.AntiAFK = main:CreateToggle({ Name = "Anti-AFK", CurrentValue = M.Utility.AntiAFK,
+		end,
+	})
+	Controls.Main.JoinServer = main:CreateButton({
+		Name = "Unirse a Servidor con esa Cantidad",
+		Callback = function()
+			Features.ServerHop()
+		end,
+	})
+	Controls.Main.AntiAFK = main:CreateToggle({
+		Name = "Anti-AFK",
+		CurrentValue = M.Utility.AntiAFK,
 		Callback = function(Value)
 			M.Utility.AntiAFK = Value
 			Features.SetAntiAFK(Value)
-		end })
-	Controls.Main.Rejoin = main:CreateButton({ Name = "Rejoin Same Server (Mismo Servidor)", Callback = function()
-		Features.Rejoin()
-	end })
+		end,
+	})
+	Controls.Main.Rejoin = main:CreateButton({
+		Name = "Rejoin Same Server (Mismo Servidor)",
+		Callback = function()
+			Features.Rejoin()
+		end,
+	})
 end
 
-do -- 2. ESP
+--------------------------------------------------------------
+-- DYNAMIC PLAYER LIST EVENT HOOKS
+--------------------------------------------------------------
+Players.PlayerAdded:Connect(function()
+	local list = getPlayerList()
+	if Controls.Main.HitboxTarget then
+		Controls.Main.HitboxTarget:Refresh(list, false)
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(leavingPlayer)
+	if Config.Main.Player.HitboxTarget == leavingPlayer.Name then
+		Config.Main.Player.HitboxTarget = "Nadie"
+	end
+	local list = getPlayerList()
+	if Controls.Main.HitboxTarget then
+		Controls.Main.HitboxTarget:Refresh(list, false)
+		if Config.Main.Player.HitboxTarget == "Nadie" then
+			Controls.Main.HitboxTarget:Set("Nadie")
+		end
+	end
+end)
+
+--------------------------------------------------------------
+-- 2. ESP TAB
+--------------------------------------------------------------
+do
 	local esp = win:CreateTab({ Name = "ESP", Icon = "◉", SubTitle = "Highlights, names and tracers" })
 
 	esp:CreateSection("Highlight ESP")
-	esp:CreateToggle({ Name = "ESP Highlight", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	esp:CreateToggle({ Name = "ESP Highlight", CurrentValue = false, Callback = function(_) end })
 
 	esp:CreateSection("Name ESP")
-	esp:CreateToggle({ Name = "ESP Nombres", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	esp:CreateToggle({ Name = "ESP Nombre + Studs + Vida", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	esp:CreateSlider({ Name = "Posicion Offset X (Lados)", Range = { -10, 10 }, Increment = 0.1, CurrentValue = 0,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	esp:CreateSlider({ Name = "Posicion Offset Y (Altura)", Range = { -10, 10 }, Increment = 0.1, CurrentValue = 0,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	esp:CreateSlider({ Name = "Tamaño de Texto ESP", Range = { 8, 32 }, Increment = 1, CurrentValue = 14,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	esp:CreateToggle({ Name = "ESP Nombres", CurrentValue = false, Callback = function(_) end })
+	esp:CreateToggle({ Name = "ESP Nombre + Studs + Vida", CurrentValue = false, Callback = function(_) end })
+	esp:CreateSlider({ Name = "Posicion Offset X (Lados)", Range = { -10, 10 }, Increment = 0.1, CurrentValue = 0, Callback = function(_) end })
+	esp:CreateSlider({ Name = "Posicion Offset Y (Altura)", Range = { -10, 10 }, Increment = 0.1, CurrentValue = 0, Callback = function(_) end })
+	esp:CreateSlider({ Name = "Tamaño de Texto ESP", Range = { 8, 32 }, Increment = 1, CurrentValue = 14, Callback = function(_) end })
 
 	esp:CreateSection("Tracers")
-	esp:CreateToggle({ Name = "Tracer Whitelist (Rojo)", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	esp:CreateDropdown({ Name = "Tracer Origin", Options = { "Mouse", "Bottom", "Center" }, CurrentOption = "Bottom",
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	esp:CreateToggle({ Name = "Team Color Tracer", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	esp:CreateToggle({ Name = "Tracer Whitelist (Rojo)", CurrentValue = false, Callback = function(_) end })
+	esp:CreateDropdown({ Name = "Tracer Origin", Options = { "Mouse", "Bottom", "Center" }, CurrentOption = "Bottom", Callback = function(_) end })
+	esp:CreateToggle({ Name = "Team Color Tracer", CurrentValue = false, Callback = function(_) end })
 
 	esp:CreateSection("Whitelist")
-	esp:CreateToggle({ Name = "ESP Whitelist Mode", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	esp:CreateDropdown({ Name = "Seleccionar Objetivo Whitelist", Options = WHITELIST_TARGETS, CurrentOption = "Nadie",
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	esp:CreateToggle({ Name = "Sincronizar con Aimlock", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	esp:CreateToggle({ Name = "Sincronizar con Triggerbot", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	esp:CreateToggle({ Name = "ESP Whitelist Mode", CurrentValue = false, Callback = function(_) end })
+	esp:CreateDropdown({ Name = "Seleccionar Objetivo Whitelist", Options = WHITELIST_TARGETS, CurrentOption = "Nadie", Callback = function(_) end })
+	esp:CreateToggle({ Name = "Sincronizar con Aimlock", CurrentValue = false, Callback = function(_) end })
+	esp:CreateToggle({ Name = "Sincronizar con Triggerbot", CurrentValue = false, Callback = function(_) end })
 
 	esp:CreateSection("Visual")
-	esp:CreateDropdown({ Name = "Color Highlight",
-		Options = { "Morado", "Rojo", "Azul", "Verde Neon", "Cyan", "Blanco" }, CurrentOption = "Morado",
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	esp:CreateToggle({ Name = "Team Color Highlight", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	esp:CreateToggle({ Name = "Team Color Tracer", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	esp:CreateToggle({ Name = "Rainbow ESP", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	esp:CreateDropdown({
+		Name = "Color Highlight",
+		Options = { "Morado", "Rojo", "Azul", "Verde Neon", "Cyan", "Blanco" },
+		CurrentOption = "Morado",
+		Callback = function(_) end,
+	})
+	esp:CreateToggle({ Name = "Team Color Highlight", CurrentValue = false, Callback = function(_) end })
+	esp:CreateToggle({ Name = "Team Color Tracer", CurrentValue = false, Callback = function(_) end })
+	esp:CreateToggle({ Name = "Rainbow ESP", CurrentValue = false, Callback = function(_) end })
 
 	esp:CreateSection("Team Check")
-	esp:CreateDropdown({ Name = "Equipos a Ignorar", Options = IGNORE_TEAMS, CurrentOption = "Ninguno",
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	esp:CreateToggle({ Name = "Sincronizar con Aimlock", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	esp:CreateToggle({ Name = "Sincronizar con Triggerbot", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	esp:CreateDropdown({ Name = "Equipos a Ignorar", Options = IGNORE_TEAMS, CurrentOption = "Ninguno", Callback = function(_) end })
+	esp:CreateToggle({ Name = "Sincronizar con Aimlock", CurrentValue = false, Callback = function(_) end })
+	esp:CreateToggle({ Name = "Sincronizar con Triggerbot", CurrentValue = false, Callback = function(_) end })
 end
 
-do -- 3. AIMLOCK
+--------------------------------------------------------------
+-- 3. AIMLOCK TAB
+--------------------------------------------------------------
+do
 	local aim = win:CreateTab({ Name = "Aimlock", Icon = "⊹", SubTitle = "Target, FOV and whitelist" })
 
 	aim:CreateSection("General")
-	aim:CreateToggle({ Name = "Aimlock", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateKeybind({ Name = "Aimlock Keybind", CurrentKeybind = "RightShift",
-		Callback = function(Key)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateSlider({ Name = "Smoothness", Range = { 0, 100 }, Increment = 1, CurrentValue = 25,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateToggle({ Name = "Prediction Aimlock", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateSlider({ Name = "Prediction Time", Range = { 0, 1 }, Increment = 0.01, CurrentValue = 0.13,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateToggle({ Name = "Team Check (No lockear equipo)", CurrentValue = true,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	aim:CreateToggle({ Name = "Aimlock", CurrentValue = false, Callback = function(_) end })
+	aim:CreateKeybind({ Name = "Aimlock Keybind", CurrentKeybind = "RightShift", Callback = function(_) end })
+	aim:CreateSlider({ Name = "Smoothness", Range = { 0, 100 }, Increment = 1, CurrentValue = 25, Callback = function(_) end })
+	aim:CreateToggle({ Name = "Prediction Aimlock", CurrentValue = false, Callback = function(_) end })
+	aim:CreateSlider({ Name = "Prediction Time", Range = { 0, 1 }, Increment = 0.01, CurrentValue = 0.13, Callback = function(_) end })
+	aim:CreateToggle({ Name = "Team Check (No lockear equipo)", CurrentValue = true, Callback = function(_) end })
 
 	aim:CreateSection("Target")
-	aim:CreateDropdown({ Name = "Aim Part", Options = { "Head", "Torso", "Auto" }, CurrentOption = "Head",
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateToggle({ Name = "Use Max Distance", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateSlider({ Name = "Max Distance", Range = { 50, 5000 }, Increment = 50, CurrentValue = 1000,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateToggle({ Name = "Use FOV", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateSlider({ Name = "FOV Size", Range = { 10, 500 }, Increment = 5, CurrentValue = 120,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	aim:CreateDropdown({ Name = "Aim Part", Options = { "Head", "Torso", "Auto" }, CurrentOption = "Head", Callback = function(_) end })
+	aim:CreateToggle({ Name = "Use Max Distance", CurrentValue = false, Callback = function(_) end })
+	aim:CreateSlider({ Name = "Max Distance", Range = { 50, 5000 }, Increment = 50, CurrentValue = 1000, Callback = function(_) end })
+	aim:CreateToggle({ Name = "Use FOV", CurrentValue = false, Callback = function(_) end })
+	aim:CreateSlider({ Name = "FOV Size", Range = { 10, 500 }, Increment = 5, CurrentValue = 120, Callback = function(_) end })
 
 	aim:CreateSection("Visual")
-	aim:CreateToggle({ Name = "Tracer Enemigos (Aimlock)", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateDropdown({ Name = "Tracer Origin", Options = { "Mouse", "Bottom" }, CurrentOption = "Mouse",
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	aim:CreateToggle({ Name = "Tracer Enemigos (Aimlock)", CurrentValue = false, Callback = function(_) end })
+	aim:CreateDropdown({ Name = "Tracer Origin", Options = { "Mouse", "Bottom" }, CurrentOption = "Mouse", Callback = function(_) end })
 
 	aim:CreateSection("Whitelist")
-	aim:CreateToggle({ Name = "Aimlock Whitelist Mode", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateDropdown({ Name = "Seleccionar Objetivo Whitelist", Options = WHITELIST_TARGETS, CurrentOption = "Nadie",
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateToggle({ Name = "Sincronizar con ESP", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateToggle({ Name = "Sincronizar con Triggerbot", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	aim:CreateToggle({ Name = "Aimlock Whitelist Mode", CurrentValue = false, Callback = function(_) end })
+	aim:CreateDropdown({ Name = "Seleccionar Objetivo Whitelist", Options = WHITELIST_TARGETS, CurrentOption = "Nadie", Callback = function(_) end })
+	aim:CreateToggle({ Name = "Sincronizar con ESP", CurrentValue = false, Callback = function(_) end })
+	aim:CreateToggle({ Name = "Sincronizar con Triggerbot", CurrentValue = false, Callback = function(_) end })
 
 	aim:CreateSection("Team Check")
-	aim:CreateDropdown({ Name = "Equipos a Ignorar", Options = IGNORE_TEAMS, CurrentOption = "Ninguno",
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateToggle({ Name = "Sincronizar con ESP", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	aim:CreateToggle({ Name = "Sincronizar con Triggerbot", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	aim:CreateDropdown({ Name = "Equipos a Ignorar", Options = IGNORE_TEAMS, CurrentOption = "Ninguno", Callback = function(_) end })
+	aim:CreateToggle({ Name = "Sincronizar con ESP", CurrentValue = false, Callback = function(_) end })
+	aim:CreateToggle({ Name = "Sincronizar con Triggerbot", CurrentValue = false, Callback = function(_) end })
 end
 
-do -- 4. TRIGGERBOT
+--------------------------------------------------------------
+-- 4. TRIGGERBOT TAB
+--------------------------------------------------------------
+do
 	local trig = win:CreateTab({ Name = "Triggerbot", Icon = "◎", SubTitle = "Auto-fire checks and whitelist" })
 
 	trig:CreateSection("General")
-	trig:CreateToggle({ Name = "Triggerbot", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	trig:CreateSlider({ Name = "Trigger Delay", Range = { 0, 500 }, Increment = 5, CurrentValue = 50, Suffix = " ms",
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	trig:CreateToggle({ Name = "Triggerbot", CurrentValue = false, Callback = function(_) end })
+	trig:CreateSlider({ Name = "Trigger Delay", Range = { 0, 500 }, Increment = 5, CurrentValue = 50, Suffix = " ms", Callback = function(_) end })
 
 	trig:CreateSection("Checks")
-	trig:CreateToggle({ Name = "Team Check (No disparar equipo)", CurrentValue = true,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	trig:CreateToggle({ Name = "Wall Check", CurrentValue = true,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	trig:CreateToggle({ Name = "Team Check (No disparar equipo)", CurrentValue = true, Callback = function(_) end })
+	trig:CreateToggle({ Name = "Wall Check", CurrentValue = true, Callback = function(_) end })
 
 	trig:CreateSection("Whitelist")
-	trig:CreateToggle({ Name = "Triggerbot Whitelist Mode", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	trig:CreateDropdown({ Name = "Seleccionar Objetivo Whitelist", Options = WHITELIST_TARGETS, CurrentOption = "Nadie",
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	trig:CreateToggle({ Name = "Sincronizar con ESP", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	trig:CreateToggle({ Name = "Sincronizar con Aimlock", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	trig:CreateToggle({ Name = "Triggerbot Whitelist Mode", CurrentValue = false, Callback = function(_) end })
+	trig:CreateDropdown({ Name = "Seleccionar Objetivo Whitelist", Options = WHITELIST_TARGETS, CurrentOption = "Nadie", Callback = function(_) end })
+	trig:CreateToggle({ Name = "Sincronizar con ESP", CurrentValue = false, Callback = function(_) end })
+	trig:CreateToggle({ Name = "Sincronizar con Aimlock", CurrentValue = false, Callback = function(_) end })
 
 	trig:CreateSection("Team Check")
-	trig:CreateDropdown({ Name = "Equipos a Ignorar", Options = IGNORE_TEAMS, CurrentOption = "Ninguno",
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	trig:CreateToggle({ Name = "Sincronizar con ESP", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	trig:CreateToggle({ Name = "Sincronizar con Aimlock", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	trig:CreateDropdown({ Name = "Equipos a Ignorar", Options = IGNORE_TEAMS, CurrentOption = "Ninguno", Callback = function(_) end })
+	trig:CreateToggle({ Name = "Sincronizar con ESP", CurrentValue = false, Callback = function(_) end })
+	trig:CreateToggle({ Name = "Sincronizar con Aimlock", CurrentValue = false, Callback = function(_) end })
 end
 
-do -- 5. EXTRAS  (Phase 1 — wired: UI -> Callback -> Config -> Feature)
+--------------------------------------------------------------
+-- 5. EXTRAS TAB
+--------------------------------------------------------------
+do
 	local extras = win:CreateTab({ Name = "Extras", Icon = "✦", SubTitle = "Camera, vision, tools, performance" })
 	local E = Config.Extras
 
 	extras:CreateSection("Camera")
-	Controls.Extras.UnlockMaxDistance = extras:CreateToggle({ Name = "Unlock Max Camera Distance (Zoom Infinito)", CurrentValue = E.Camera.UnlockMaxDistance,
+	Controls.Extras.UnlockMaxDistance = extras:CreateToggle({
+		Name = "Unlock Max Camera Distance (Zoom Infinito)",
+		CurrentValue = E.Camera.UnlockMaxDistance,
 		Callback = function(Value)
 			E.Camera.UnlockMaxDistance = Value
 			Features.SetUnlockMaxDistance(Value)
-		end })
-	Controls.Extras.FOVChanger = extras:CreateToggle({ Name = "FOV Changer", CurrentValue = E.Camera.FOVChanger,
+		end,
+	})
+	Controls.Extras.FOVChanger = extras:CreateToggle({
+		Name = "FOV Changer",
+		CurrentValue = E.Camera.FOVChanger,
 		Callback = function(Value)
 			E.Camera.FOVChanger = Value
 			Features.SetFOVChanger(Value)
-		end })
-	Controls.Extras.FOV = extras:CreateSlider({ Name = "FOV", Range = { 70, 120 }, Increment = 1, CurrentValue = E.Camera.FOV,
+		end,
+	})
+	Controls.Extras.FOV = extras:CreateSlider({
+		Name = "FOV",
+		Range = { 70, 120 },
+		Increment = 1,
+		CurrentValue = E.Camera.FOV,
 		Callback = function(Value)
 			E.Camera.FOV = Value
-		end })
-	Controls.Extras.Freecam = extras:CreateToggle({ Name = "Freecam", CurrentValue = E.Camera.Freecam,
+		end,
+	})
+	Controls.Extras.Freecam = extras:CreateToggle({
+		Name = "Freecam",
+		CurrentValue = E.Camera.Freecam,
 		Callback = function(Value)
 			E.Camera.Freecam = Value
 			Features.SetFreecam(Value)
-		end })
+		end,
+	})
+	Controls.Extras.FreecamSpeed = extras:CreateSlider({
+		Name = "Freecam Camera Speed",
+		Range = { 1, 100 },
+		Increment = 1,
+		CurrentValue = E.Camera.FreecamSpeed,
+		Callback = function(Value)
+			E.Camera.FreecamSpeed = Value
+		end,
+	})
 
 	extras:CreateSection("Vision")
-	-- X-Ray (see-through-walls) is a vision advantage: UI + Config + callback only.
-	Controls.Extras.XRay = extras:CreateToggle({ Name = "X-Ray", CurrentValue = E.Vision.XRay,
+	Controls.Extras.XRay = extras:CreateToggle({
+		Name = "X-Ray",
+		CurrentValue = E.Vision.XRay,
 		Callback = function(Value)
 			E.Vision.XRay = Value
-		end })
+			Features.SetXRay(Value)
+		end,
+	})
 
 	extras:CreateSection("Tools")
-	Controls.Extras.ClickTP = extras:CreateToggle({ Name = "Click TP", CurrentValue = E.Tools.ClickTP,
+	Controls.Extras.ClickTP = extras:CreateToggle({
+		Name = "Click TP",
+		CurrentValue = E.Tools.ClickTP,
 		Callback = function(Value)
 			E.Tools.ClickTP = Value
 			Features.SetClickTP(Value)
-		end })
-	-- BTools manipulate the game world / other instances: UI + Config + callback only.
-	Controls.Extras.BTools = extras:CreateToggle({ Name = "BTools", CurrentValue = E.Tools.BTools,
+		end,
+	})
+	Controls.Extras.BTools = extras:CreateToggle({
+		Name = "BTools",
+		CurrentValue = E.Tools.BTools,
 		Callback = function(Value)
 			E.Tools.BTools = Value
-		end })
+			Features.SetBTools(Value)
+		end,
+	})
 
 	extras:CreateSection("Performance")
-	Controls.Extras.FPSBoost = extras:CreateToggle({ Name = "FPS Boost", CurrentValue = E.Performance.FPSBoost,
+	Controls.Extras.FPSBoost = extras:CreateToggle({
+		Name = "FPS Boost",
+		CurrentValue = E.Performance.FPSBoost,
 		Callback = function(Value)
 			E.Performance.FPSBoost = Value
 			Features.SetFPSBoost(Value)
-		end })
-	Controls.Extras.AntiFling = extras:CreateToggle({ Name = "Anti-Fling", CurrentValue = E.Performance.AntiFling,
+		end,
+	})
+	Controls.Extras.AntiFling = extras:CreateToggle({
+		Name = "Anti-Fling",
+		CurrentValue = E.Performance.AntiFling,
 		Callback = function(Value)
 			E.Performance.AntiFling = Value
 			Features.SetAntiFling(Value)
-		end })
+		end,
+	})
 end
 
-do -- 6. TROLL
+--------------------------------------------------------------
+-- 6. TROLL TAB
+--------------------------------------------------------------
+do
 	local troll = win:CreateTab({ Name = "Troll", Icon = "☻", SubTitle = "Troll scripts" })
 
 	troll:CreateSection("Scripts")
-	troll:CreateToggle({ Name = "Fling", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	troll:CreateToggle({ Name = "Invisible", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	troll:CreateToggle({ Name = "Fling", CurrentValue = false, Callback = function(_) end })
+	troll:CreateToggle({ Name = "Invisible", CurrentValue = false, Callback = function(_) end })
 end
 
-do -- 7. SOUNDS
+--------------------------------------------------------------
+-- 7. SOUNDS TAB
+--------------------------------------------------------------
+do
 	local sounds = win:CreateTab({ Name = "Sounds", Icon = "♪", SubTitle = "Lock and hit sound configuration" })
 
 	sounds:CreateSection("Configuracion de Sonidos")
-	sounds:CreateToggle({ Name = "Lock Sound (Sonido al fijar)", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	sounds:CreateDropdown({ Name = "Sonido para Lock Target", Options = SOUND_LIST, CurrentOption = "Skeet / Gamesense",
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	sounds:CreateToggle({ Name = "Hit Sound (Sonido al golpear/disparar)", CurrentValue = false,
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	sounds:CreateDropdown({ Name = "Sonido para Hit / Disparo", Options = SOUND_LIST, CurrentOption = "Neverlose Hit",
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
+	sounds:CreateToggle({ Name = "Lock Sound (Sonido al fijar)", CurrentValue = false, Callback = function(_) end })
+	sounds:CreateDropdown({ Name = "Sonido para Lock Target", Options = SOUND_LIST, CurrentOption = "Skeet / Gamesense", Callback = function(_) end })
+	sounds:CreateToggle({ Name = "Hit Sound (Sonido al golpear/disparar)", CurrentValue = false, Callback = function(_) end })
+	sounds:CreateDropdown({ Name = "Sonido para Hit / Disparo", Options = SOUND_LIST, CurrentOption = "Neverlose Hit", Callback = function(_) end })
 
 	sounds:CreateSection("Probar & Escuchar Sonidos")
-	sounds:CreateDropdown({ Name = "Lista de Sonidos", Options = SOUND_LIST, CurrentOption = "Skeet / Gamesense",
-		Callback = function(Value)
-			-- FUTURE LOGIC HERE
-		end })
-	sounds:CreateButton({ Name = "Reproducir Sonido Seleccionado", Callback = function()
-		-- FUTURE LOGIC HERE
-	end })
+	sounds:CreateDropdown({ Name = "Lista de Sonidos", Options = SOUND_LIST, CurrentOption = "Skeet / Gamesense", Callback = function(_) end })
+	sounds:CreateButton({ Name = "Reproducir Sonido Seleccionado", Callback = function() end })
 end
 
--- Start the single event-driven hotkey listener now that Config is populated
--- (Fly / WalkSpeed keybinds trigger their Feature toggles in-game).
+-- Initialize hotkeys listener
 Features.StartHotkeys()
 
--- Expose the framework for external scripts / adapter usage.
+-- Return framework handle
 return {
 	RATAHUB = RATAHUB,
 	Window = win,
