@@ -1599,6 +1599,25 @@ function Tab:CreateDropdown(cfg)
 			if cfg.Callback then task.spawn(cfg.Callback, v) end
 		end
 	end
+	function handle:SetSilent(v)
+		if isMulti then
+			selectedMulti = {}
+			if type(v) == "table" then
+				for k, val in pairs(v) do
+					if type(k) == "string" and val == true then selectedMulti[k] = true
+					elseif type(val) == "string" then selectedMulti[val] = true end
+				end
+			elseif type(v) == "string" and v ~= "" and v ~= "Nadie" then
+				selectedMulti[v] = true
+			end
+			selectedLabel.Text = getDisplayText()
+			if open then rebuildOptions() end
+		else
+			current = v
+			selectedLabel.Text = tostring(v)
+			if open then rebuildOptions() end
+		end
+	end
 	function handle:Get() return isMulti and selectedMulti or current end
 	return handle
 end
@@ -2612,6 +2631,25 @@ function Features.RestoreHitboxes()
 	table.clear(Runtime.Hitbox.origs)
 end
 
+function Features.ToggleHitboxLoop(enable)
+	if enable then
+		if Runtime.Hitbox.loop then return end
+		Runtime.Hitbox.loop = task.spawn(function()
+			while Config.Main.Player.HitboxExpander do
+				Features.UpdateHitboxes()
+				task.wait(0.1)
+			end
+			Runtime.Hitbox.loop = nil
+		end)
+	else
+		if Runtime.Hitbox.loop then
+			pcall(function() task.cancel(Runtime.Hitbox.loop) end)
+			Runtime.Hitbox.loop = nil
+		end
+		Features.RestoreHitboxes()
+	end
+end
+
 function Features.DestroyHub()
 	Features.StopFly()
 	Features.StopWalkSpeed()
@@ -2949,10 +2987,8 @@ function Features.FindBestAimlockTarget()
 				end
 
 				-- Whitelist
-				if aimCfg.WhitelistMode == "Only Whitelist" then
-					if p.Name ~= aimCfg.WhitelistTarget then isValid = false end
-				elseif aimCfg.WhitelistMode == "Ignore Whitelist" then
-					if p.Name == aimCfg.WhitelistTarget then isValid = false end
+				if not Features.IsWhitelisted(p, aimCfg.WhitelistMode, aimCfg.WhitelistTarget) then
+					isValid = false
 				end
 
 				-- Team Check
@@ -3586,11 +3622,7 @@ do
 		CurrentValue = M.Player.HitboxExpander,
 		Callback = function(Value)
 			M.Player.HitboxExpander = Value
-			if Value then
-				Features.UpdateHitboxes()
-			else
-				Features.RestoreHitboxes()
-			end
+			Features.ToggleHitboxLoop(Value)
 		end,
 	})
 	Controls.Main.HitboxSize = main:CreateSlider({
@@ -3784,14 +3816,20 @@ do
 	})
 
 	esp:CreateSection("Whitelist")
+	local isSyncing = false
 	Controls.ESP.WhitelistMode = esp:CreateDropdown({
 		Name = "ESP Whitelist Mode",
 		Options = { "Disabled", "Ignore Whitelist", "Only Whitelist" },
 		CurrentOption = E.WhitelistMode,
 		Callback = function(Value)
 			E.WhitelistMode = Value
-			if E.SyncAimlock and Controls.Aimlock.WhitelistMode then
-				Controls.Aimlock.WhitelistMode:Set(Value)
+			if not isSyncing then
+				isSyncing = true
+				if E.SyncAimlock and Controls.Aimlock.WhitelistMode then
+					Config.Aimlock.WhitelistMode = Value
+					Controls.Aimlock.WhitelistMode:SetSilent(Value)
+				end
+				isSyncing = false
 			end
 		end,
 	})
@@ -3801,8 +3839,13 @@ do
 		CurrentOption = E.WhitelistTarget,
 		Callback = function(Value)
 			E.WhitelistTarget = Value
-			if E.SyncAimlock and Controls.Aimlock.WhitelistTarget then
-				Controls.Aimlock.WhitelistTarget:Set(Value)
+			if not isSyncing then
+				isSyncing = true
+				if E.SyncAimlock and Controls.Aimlock.WhitelistTarget then
+					Config.Aimlock.WhitelistTarget = Value
+					Controls.Aimlock.WhitelistTarget:SetSilent(Value)
+				end
+				isSyncing = false
 			end
 		end,
 	})
@@ -3811,11 +3854,13 @@ do
 		CurrentValue = E.SyncAimlock,
 		Callback = function(Value)
 			E.SyncAimlock = Value
-			if Value then
+			if Value and not isSyncing then
+				isSyncing = true
 				Config.Aimlock.WhitelistMode = E.WhitelistMode
 				Config.Aimlock.WhitelistTarget = E.WhitelistTarget
-				if Controls.Aimlock.WhitelistMode then Controls.Aimlock.WhitelistMode:Set(E.WhitelistMode) end
-				if Controls.Aimlock.WhitelistTarget then Controls.Aimlock.WhitelistTarget:Set(E.WhitelistTarget) end
+				if Controls.Aimlock.WhitelistMode then Controls.Aimlock.WhitelistMode:SetSilent(E.WhitelistMode) end
+				if Controls.Aimlock.WhitelistTarget then Controls.Aimlock.WhitelistTarget:SetSilent(E.WhitelistTarget) end
+				isSyncing = false
 			end
 		end,
 	})
@@ -4005,8 +4050,13 @@ do
 		CurrentOption = A.WhitelistMode,
 		Callback = function(Value)
 			A.WhitelistMode = Value
-			if A.SyncESP and Controls.ESP.WhitelistMode then
-				Controls.ESP.WhitelistMode:Set(Value)
+			if not isSyncing then
+				isSyncing = true
+				if A.SyncESP and Controls.ESP.WhitelistMode then
+					Config.ESP.WhitelistMode = Value
+					Controls.ESP.WhitelistMode:SetSilent(Value)
+				end
+				isSyncing = false
 			end
 		end,
 	})
@@ -4016,8 +4066,13 @@ do
 		CurrentOption = A.WhitelistTarget,
 		Callback = function(Value)
 			A.WhitelistTarget = Value
-			if A.SyncESP and Controls.ESP.WhitelistTarget then
-				Controls.ESP.WhitelistTarget:Set(Value)
+			if not isSyncing then
+				isSyncing = true
+				if A.SyncESP and Controls.ESP.WhitelistTarget then
+					Config.ESP.WhitelistTarget = Value
+					Controls.ESP.WhitelistTarget:SetSilent(Value)
+				end
+				isSyncing = false
 			end
 		end,
 	})
@@ -4026,11 +4081,13 @@ do
 		CurrentValue = A.SyncESP,
 		Callback = function(Value)
 			A.SyncESP = Value
-			if Value then
+			if Value and not isSyncing then
+				isSyncing = true
 				Config.ESP.WhitelistMode = A.WhitelistMode
 				Config.ESP.WhitelistTarget = A.WhitelistTarget
-				if Controls.ESP.WhitelistMode then Controls.ESP.WhitelistMode:Set(A.WhitelistMode) end
-				if Controls.ESP.WhitelistTarget then Controls.ESP.WhitelistTarget:Set(A.WhitelistTarget) end
+				if Controls.ESP.WhitelistMode then Controls.ESP.WhitelistMode:SetSilent(A.WhitelistMode) end
+				if Controls.ESP.WhitelistTarget then Controls.ESP.WhitelistTarget:SetSilent(A.WhitelistTarget) end
+				isSyncing = false
 			end
 		end,
 	})
