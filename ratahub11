@@ -1,5 +1,5 @@
 --[[
-	RATAHUB V5 — Premium Roblox Utility GUI Framework hola chatgpt
+	RATAHUB V5 — Premium Roblox Utility GUI Framework hola chat otra ves
 	Pass: Dropdown Visibility & Dynamic Anchor Fix, Full ESP (Purple/Red/Friend Green),
 	      Persistent Aimlock Target Architecture, Whitelist/Team/Friend Synchronized Logic.
 
@@ -33,6 +33,9 @@ local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local Lighting = game:GetService("Lighting")
 local Teams = game:GetService("Teams")
+local SoundService = game:GetService("SoundService")
+local Debris = game:GetService("Debris")
+
 local VirtualUser = nil
 pcall(function() VirtualUser = game:GetService("VirtualUser") end)
 
@@ -40,8 +43,19 @@ local player = Players.LocalPlayer
 local coreGui = game:GetService("CoreGui")
 local playerGui = (gethui and gethui()) or (pcall(function() return coreGui end) and (coreGui:FindFirstChild("RobloxGui") or coreGui)) or player:WaitForChild("PlayerGui")
 
--- Global Whitelist Table (Source of truth for global players)
+-- Global Whitelist Table (Source of truth for global player selections)
 local GlobalWhitelistTable = {}
+
+-- Sound Assets Map
+local SoundAssetIDs = {
+	["Skeet / Gamesense"] = "rbxassetid://4817809188",
+	["Neverlose Hit"]     = "rbxassetid://6607204501",
+	["CS:GO Hit"]         = "rbxassetid://160432334",
+	["TF2 Critical Hit"]  = "rbxassetid://296102734",
+	["Bubble Pop"]        = "rbxassetid://6026900223",
+	["Rust Headshot"]     = "rbxassetid://1255040462",
+	["CS:GO Headshot"]    = "rbxassetid://138041184151350",
+}
 
 --=====================================================================
 -- THEME (PRESERVED)
@@ -1323,7 +1337,7 @@ function Tab:CreateDropdown(cfg)
 	cfg = cfg or {}
 	local card = self:_ensureCard()
 	local options = cfg.Options or {}
-	local isMulti = (cfg.Name == "Seleccionar Objetivo Whitelist")
+	local isMulti = (cfg.Name == "Seleccionar Objetivo Whitelist" or cfg.MultiSelect == true)
 	local current = cfg.CurrentOption or (isMulti and {} or (options[1] or ""))
 	local selectedMulti = {}
 	if isMulti then
@@ -1599,6 +1613,7 @@ function Tab:CreateDropdown(cfg)
 			if cfg.Callback then task.spawn(cfg.Callback, v) end
 		end
 	end
+
 	function handle:SetSilent(v)
 		if isMulti then
 			selectedMulti = {}
@@ -1618,10 +1633,10 @@ function Tab:CreateDropdown(cfg)
 			if open then rebuildOptions() end
 		end
 	end
+
 	function handle:Get() return isMulti and selectedMulti or current end
 	return handle
 end
-
 function Tab:CreateKeybind(cfg)
 	cfg = cfg or {}
 	local card = self:_ensureCard()
@@ -2134,15 +2149,17 @@ local Config = {
 		Movement = {
 			Fly = false,
 			FlyActive = false,
-			FlyKeybind = "V",
-			FlySpeed = 140,
+			FlySpeed = 50,
+			FlyKeybind = "X",
 			WalkSpeedEnabled = false,
-			WalkSpeedKeybind = "C",
 			WalkSpeed = 16,
+			WalkSpeedKeybind = "Z",
 			JumpPowerEnabled = false,
 			JumpPower = 50,
+			JumpPowerKeybind = "C",
 			GravityEnabled = false,
 			Gravity = 196.2,
+			GravityKeybind = "V",
 			InfiniteJump = false,
 			InfiniteJumpActive = false,
 			InfiniteJumpKeybind = "M",
@@ -2202,7 +2219,21 @@ local Config = {
 		IgnoreTeams = "Ninguno",
 		FriendCheck = true,
 	},
-	Triggerbot = {},
+	Triggerbot = {
+		Enabled = false,
+		Active = false,
+		Keybind = "None",
+		Delay = 50,
+		TeamCheck = true,
+		WallCheck = true,
+		WhitelistMode = "Disabled",
+		WhitelistTarget = "Nadie",
+		SyncESP = false,
+		SyncAimlock = false,
+		IgnoreTeams = "Ninguno",
+		SyncTeamESP = false,
+		SyncTeamAimlock = false,
+	},
 	Extras = {
 		Camera = {
 			UnlockMaxDistance = false,
@@ -2223,8 +2254,17 @@ local Config = {
 			AntiFling = false,
 		},
 	},
-	Troll = {},
-	Sounds = {},
+	Troll = {
+		Fling = false,
+		Invisible = false,
+	},
+	Sounds = {
+		LockSound = true,
+		LockTargetSound = "Neverlose Hit",
+		HitSound = false,
+		HitShootSound = "Skeet / Gamesense",
+		PreviewSound = "Neverlose Hit",
+	},
 }
 
 function RATAHUB:GetConfig() return Config end
@@ -2254,129 +2294,194 @@ local Runtime = {
 		freecamLoop = nil, freecamBegan = nil, freecamEnded = nil,
 		savedType = nil, savedSubject = nil, wasAnchored = false, keys = {},
 	},
-	Vision       = { xrayCache = {} },
-	Tools        = { btoolsList = {} },
-	Performance  = { antiFlingConn = nil, savedLighting = nil, savedParticles = {} },
-	Hotkeys      = { conn = nil },
+	XRay         = { parts = {} },
+	AntiFling    = { conn = nil },
 	ESP          = { loop = nil, container = nil, objects = {} },
-	Aimlock      = { loop = nil, currentTarget = nil, locked = false, tracer = nil },
-	FriendsCache = {},
+	Aimlock      = { loop = nil, locked = false, currentTarget = nil, tracer = nil, fovCircle = nil },
+	Triggerbot   = { active = false, loop = nil, isShooting = false },
+	Hitbox       = { loop = nil, origs = {} },
+	Hotkeys      = { conn = nil },
 }
 
---=====================================================================
--- COLOR PALETTE CONSTANTS
---=====================================================================
-local ESP_PURPLE = Color3.fromRGB(168, 85, 247)
-local ESP_RED    = Color3.fromRGB(255, 0, 0)
-local ESP_GREEN  = Color3.fromRGB(0, 255, 120)
-
-local COLOR_MAP = {
-	["Morado"]     = ESP_PURPLE,
-	["Rojo"]       = ESP_RED,
-	["Azul"]       = Color3.fromRGB(59, 130, 246),
-	["Verde Neon"] = ESP_GREEN,
-	["Cyan"]       = Color3.fromRGB(6, 182, 212),
-	["Blanco"]     = Color3.fromRGB(255, 255, 255),
-}
-
---=====================================================================
--- FEATURE MODULES
---=====================================================================
 local Features = {}
 
-local function getChar() return player.Character end
+-- Sound Player
+function Features.PlaySound(soundName)
+	local id = SoundAssetIDs[soundName]
+	if id then
+		local s = Instance.new("Sound")
+		s.SoundId = id
+		s.Volume = 1
+		s.Parent = SoundService or workspace
+		s:Play()
+		Debris:AddItem(s, 3)
+	end
+end
+
+------------------------------------------------------------- SYNC MANAGER (Single Layer, Anti-Loop)
+local SyncManager = { isSyncing = false }
+
+function SyncManager.SyncProperty(sourceModule, propName, value)
+	if SyncManager.isSyncing then return end
+	SyncManager.isSyncing = true
+
+	local targets = {}
+	if sourceModule == "ESP" then
+		if Config.ESP.SyncAimlock then table.insert(targets, "Aimlock") end
+		if Config.ESP.SyncTriggerbot then table.insert(targets, "Triggerbot") end
+	elseif sourceModule == "Aimlock" then
+		if Config.Aimlock.SyncESP then table.insert(targets, "ESP") end
+		if Config.Aimlock.SyncTriggerbot then table.insert(targets, "Triggerbot") end
+	elseif sourceModule == "Triggerbot" then
+		if Config.Triggerbot.SyncESP then table.insert(targets, "ESP") end
+		if Config.Triggerbot.SyncAimlock then table.insert(targets, "Aimlock") end
+	end
+
+	for _, targetMod in ipairs(targets) do
+		if propName == "WhitelistMode" then
+			Config[targetMod].WhitelistMode = value
+			if Controls[targetMod] and Controls[targetMod].WhitelistMode then
+				Controls[targetMod].WhitelistMode:SetSilent(value)
+			end
+		elseif propName == "WhitelistTarget" then
+			Config[targetMod].WhitelistTarget = value
+			if Controls[targetMod] and Controls[targetMod].WhitelistTarget then
+				Controls[targetMod].WhitelistTarget:SetSilent(value)
+			end
+		elseif propName == "IgnoreTeams" then
+			Config[targetMod].IgnoreTeams = value
+			if Controls[targetMod] and Controls[targetMod].IgnoreTeams then
+				Controls[targetMod].IgnoreTeams:SetSilent(value)
+			end
+		end
+	end
+
+	SyncManager.isSyncing = false
+end
+
+function SyncManager.OnSyncToggled(sourceModule, targetModule, enabled)
+	if enabled and not SyncManager.isSyncing then
+		SyncManager.isSyncing = true
+		local sCfg = Config[sourceModule]
+		local tCfg = Config[targetModule]
+		if sCfg and tCfg then
+			tCfg.WhitelistMode = sCfg.WhitelistMode
+			tCfg.WhitelistTarget = sCfg.WhitelistTarget
+			tCfg.IgnoreTeams = sCfg.IgnoreTeams
+
+			if Controls[targetModule] then
+				if Controls[targetModule].WhitelistMode then Controls[targetModule].WhitelistMode:SetSilent(sCfg.WhitelistMode) end
+				if Controls[targetModule].WhitelistTarget then Controls[targetModule].WhitelistTarget:SetSilent(sCfg.WhitelistTarget) end
+				if Controls[targetModule].IgnoreTeams then Controls[targetModule].IgnoreTeams:SetSilent(sCfg.IgnoreTeams) end
+			end
+		end
+		SyncManager.isSyncing = false
+	end
+end
+
+Features.SyncManager = SyncManager
+
+------------------------------------------------------------- Utility: Helpers
+local function getChar()
+	return player.Character or player.CharacterAdded:Wait()
+end
+
 local function getHumanoid()
 	local c = player.Character
 	return c and c:FindFirstChildOfClass("Humanoid")
 end
+
 local function getRoot()
 	local c = player.Character
 	return c and c:FindFirstChild("HumanoidRootPart")
 end
 
-function Features.IsFriend(p)
-	if p == player then return false end
-	if Runtime.FriendsCache[p.UserId] ~= nil then
-		return Runtime.FriendsCache[p.UserId]
-	end
-	local ok, isFr = pcall(function()
-		return player:IsFriendsWith(p.UserId)
-	end)
-	local res = ok and isFr or false
-	Runtime.FriendsCache[p.UserId] = res
-	return res
-end
-
 ------------------------------------------------------------- Movement: Fly
-function Features.StopFly()
-	Runtime.Fly.active = false
-	if Runtime.Fly.loop then Runtime.Fly.loop:Disconnect() Runtime.Fly.loop = nil end
-	if Runtime.Fly.bv then Runtime.Fly.bv:Destroy() Runtime.Fly.bv = nil end
-	if Runtime.Fly.bg then Runtime.Fly.bg:Destroy() Runtime.Fly.bg = nil end
-	local char = getChar()
-	if char then
-		local hum = char:FindFirstChildOfClass("Humanoid")
-		if hum then hum.PlatformStand = false end
-		if Runtime.Fly.animate then
-			Runtime.Fly.animate.Parent = char
-			Runtime.Fly.animate = nil
+function Features.StartFly()
+	if Runtime.Fly.loop then return end
+	local root = getRoot()
+	local hum = getHumanoid()
+	if not root or not hum then return end
+
+	local bv = Instance.new("BodyVelocity")
+	bv.Velocity = Vector3.zero
+	bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+	bv.Parent = root
+	Runtime.Fly.bv = bv
+
+	local bg = Instance.new("BodyGyro")
+	bg.CFrame = root.CFrame
+	bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+	bg.P = 9e4
+	bg.Parent = root
+	Runtime.Fly.bg = bg
+
+	hum.PlatformStand = true
+
+	Runtime.Fly.loop = RunService.RenderStepped:Connect(function()
+		if not Runtime.Fly.active or not Config.Main.Movement.Fly then
+			Features.StopFly()
+			return
 		end
-	end
+
+		local cam = workspace.CurrentCamera
+		if not cam or not root then return end
+
+		local moveDir = Vector3.zero
+		if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + cam.CFrame.LookVector end
+		if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - cam.CFrame.LookVector end
+		if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - cam.CFrame.RightVector end
+		if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + cam.CFrame.RightVector end
+		if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir = moveDir + Vector3.new(0, 1, 0) end
+		if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir = moveDir - Vector3.new(0, 1, 0) end
+
+		if moveDir.Magnitude > 0 then
+			bv.Velocity = moveDir.Unit * Config.Main.Movement.FlySpeed
+		else
+			bv.Velocity = Vector3.zero
+		end
+		bg.CFrame = cam.CFrame
+	end)
 end
 
-function Features.StartFly()
-	local char = getChar()
-	if not char or not char:FindFirstChild("HumanoidRootPart") then return end
-	local hum = char:FindFirstChildOfClass("Humanoid")
-	local root = char.HumanoidRootPart
-	if hum then hum.PlatformStand = true end
-	if char:FindFirstChild("Animate") then
-		Runtime.Fly.animate = char.Animate:Clone()
-		char.Animate:Destroy()
+function Features.StopFly()
+	if Runtime.Fly.loop then
+		Runtime.Fly.loop:Disconnect()
+		Runtime.Fly.loop = nil
 	end
-	Runtime.Fly.bv = Instance.new("BodyVelocity")
-	Runtime.Fly.bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
-	Runtime.Fly.bv.Velocity = Vector3.zero
-	Runtime.Fly.bv.Parent = root
-	Runtime.Fly.bg = Instance.new("BodyGyro")
-	Runtime.Fly.bg.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
-	Runtime.Fly.bg.P = 20000
-	Runtime.Fly.bg.D = 800
-	Runtime.Fly.bg.Parent = root
-	Runtime.Fly.active = true
-	Runtime.Fly.loop = RunService.RenderStepped:Connect(function()
-		if not Runtime.Fly.active then return end
-		local cam = workspace.CurrentCamera
-		if not cam then return end
-		local look = cam.CFrame.LookVector
-		local right = look:Cross(Vector3.new(0, 1, 0))
-		local move = Vector3.zero
-		if UserInputService:IsKeyDown(Enum.KeyCode.W) then move += look end
-		if UserInputService:IsKeyDown(Enum.KeyCode.S) then move -= look end
-		if UserInputService:IsKeyDown(Enum.KeyCode.A) then move -= right end
-		if UserInputService:IsKeyDown(Enum.KeyCode.D) then move += right end
-		if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0, 1, 0) end
-		if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then move -= Vector3.new(0, 1, 0) end
-		Runtime.Fly.bv.Velocity = move * Config.Main.Movement.FlySpeed
-		Runtime.Fly.bg.CFrame = cam.CFrame
-	end)
+	if Runtime.Fly.bv then
+		Runtime.Fly.bv:Destroy()
+		Runtime.Fly.bv = nil
+	end
+	if Runtime.Fly.bg then
+		Runtime.Fly.bg:Destroy()
+		Runtime.Fly.bg = nil
+	end
+	local hum = getHumanoid()
+	if hum then
+		hum.PlatformStand = false
+	end
+	Runtime.Fly.active = false
 end
 
 function Features.SetFlyMaster(enabled)
 	Config.Main.Movement.Fly = enabled
-	Config.Main.Movement.FlyActive = false
-	Features.StopFly()
-	RATAHUB:Notify({
-		Title = "Fly",
-		Content = enabled and ("Permitido (" .. Config.Main.Movement.FlyKeybind .. " para activar)") or "Deshabilitado",
-		Duration = 1.2
-	})
+	if not enabled then
+		Features.StopFly()
+		RATAHUB:Notify({ Title = "Fly", Content = "Deshabilitado", Duration = 1.2 })
+	else
+		RATAHUB:Notify({
+			Title = "Fly",
+			Content = "Permitido (" .. tostring(Config.Main.Movement.FlyKeybind or "X") .. " para activar)",
+			Duration = 1.2
+		})
+	end
 end
 
 function Features.ToggleFlyActive()
 	if not Config.Main.Movement.Fly then return end
-	Config.Main.Movement.FlyActive = not Config.Main.Movement.FlyActive
-	if Config.Main.Movement.FlyActive then
+	Runtime.Fly.active = not Runtime.Fly.active
+	if Runtime.Fly.active then
 		Features.StartFly()
 		RATAHUB:Notify({ Title = "Fly", Content = "Activo", Duration = 1.2 })
 	else
@@ -2388,10 +2493,12 @@ end
 ------------------------------------------------------------- Movement: WalkSpeed
 function Features.StartWalkSpeed()
 	if Runtime.WalkSpeed.loop then return end
-	Runtime.WalkSpeed.loop = RunService.RenderStepped:Connect(function()
+	Runtime.WalkSpeed.loop = RunService.Heartbeat:Connect(function()
 		local hum = getHumanoid()
 		if not hum then return end
-		if not Runtime.WalkSpeed.original then Runtime.WalkSpeed.original = hum.WalkSpeed end
+		if not Runtime.WalkSpeed.original then
+			Runtime.WalkSpeed.original = hum.WalkSpeed
+		end
 		if Config.Main.Movement.WalkSpeedEnabled and Runtime.WalkSpeed.active then
 			local desired = Config.Main.Movement.WalkSpeed or 16
 			if hum.WalkSpeed ~= desired then hum.WalkSpeed = desired end
@@ -2453,63 +2560,96 @@ function Features.StartJumpPower()
 		if not Runtime.JumpPower.original then
 			Runtime.JumpPower.original = hum.UseJumpPower and hum.JumpPower or hum.JumpHeight
 		end
-		local target = Config.Main.Movement.JumpPowerEnabled
-			and Config.Main.Movement.JumpPower or Runtime.JumpPower.original
-		if hum.UseJumpPower then
-			if hum.JumpPower ~= target then hum.JumpPower = target end
+		if Config.Main.Movement.JumpPowerEnabled then
+			if hum.UseJumpPower then
+				hum.JumpPower = Config.Main.Movement.JumpPower
+			else
+				hum.JumpHeight = Config.Main.Movement.JumpPower
+			end
 		else
-			if hum.JumpHeight ~= target then hum.JumpHeight = target end
+			if hum.UseJumpPower then
+				hum.JumpPower = Runtime.JumpPower.original or 50
+			else
+				hum.JumpHeight = Runtime.JumpPower.original or 7.2
+			end
 		end
 	end)
 end
 
 function Features.StopJumpPower()
-	if Runtime.JumpPower.loop then Runtime.JumpPower.loop:Disconnect() Runtime.JumpPower.loop = nil end
+	if Runtime.JumpPower.loop then
+		Runtime.JumpPower.loop:Disconnect()
+		Runtime.JumpPower.loop = nil
+	end
 	local hum = getHumanoid()
 	if hum and Runtime.JumpPower.original then
-		if hum.UseJumpPower then hum.JumpPower = Runtime.JumpPower.original
-		else hum.JumpHeight = Runtime.JumpPower.original end
+		if hum.UseJumpPower then
+			hum.JumpPower = Runtime.JumpPower.original
+		else
+			hum.JumpHeight = Runtime.JumpPower.original
+		end
+	end
+end
+
+function Features.SetJumpPowerMaster(enabled)
+	Config.Main.Movement.JumpPowerEnabled = enabled
+	if enabled then
+		Features.StartJumpPower()
+	else
+		Features.StopJumpPower()
 	end
 end
 
 ------------------------------------------------------------- Movement: Gravity
 function Features.StartGravity()
 	if Runtime.Gravity.loop then return end
-	Runtime.Gravity.loop = RunService.RenderStepped:Connect(function()
-		workspace.Gravity = Config.Main.Movement.GravityEnabled
-			and Config.Main.Movement.Gravity or DEFAULT_GRAVITY
+	Runtime.Gravity.loop = RunService.Heartbeat:Connect(function()
+		if Config.Main.Movement.GravityEnabled then
+			workspace.Gravity = Config.Main.Movement.Gravity
+		else
+			workspace.Gravity = 196.2
+		end
 	end)
 end
 
 function Features.StopGravity()
-	if Runtime.Gravity.loop then Runtime.Gravity.loop:Disconnect() Runtime.Gravity.loop = nil end
-	workspace.Gravity = DEFAULT_GRAVITY
+	if Runtime.Gravity.loop then
+		Runtime.Gravity.loop:Disconnect()
+		Runtime.Gravity.loop = nil
+	end
+	workspace.Gravity = 196.2
+end
+
+function Features.SetGravityMaster(enabled)
+	Config.Main.Movement.GravityEnabled = enabled
+	if enabled then
+		Features.StartGravity()
+	else
+		Features.StopGravity()
+	end
 end
 
 ------------------------------------------------------------- Movement: Infinite Jump
 function Features.SetInfiniteJumpMaster(enabled)
 	Config.Main.Movement.InfiniteJump = enabled
-	Config.Main.Movement.InfiniteJumpActive = false
-	if not enabled and Runtime.InfiniteJump.conn then
-		Runtime.InfiniteJump.conn:Disconnect()
-		Runtime.InfiniteJump.conn = nil
+	if not enabled then
+		if Runtime.InfiniteJump.conn then
+			Runtime.InfiniteJump.conn:Disconnect()
+			Runtime.InfiniteJump.conn = nil
+		end
+		Runtime.InfiniteJump.active = false
 	end
-	RATAHUB:Notify({
-		Title = "Infinite Jump",
-		Content = enabled and ("Permitido (" .. Config.Main.Movement.InfiniteJumpKeybind .. " para activar)") or "Deshabilitado",
-		Duration = 1.2
-	})
 end
 
 function Features.ToggleInfiniteJumpActive()
 	if not Config.Main.Movement.InfiniteJump then return end
-	Config.Main.Movement.InfiniteJumpActive = not Config.Main.Movement.InfiniteJumpActive
-	if Config.Main.Movement.InfiniteJumpActive then
+	Runtime.InfiniteJump.active = not Runtime.InfiniteJump.active
+	if Runtime.InfiniteJump.active then
 		if not Runtime.InfiniteJump.conn then
 			Runtime.InfiniteJump.conn = UserInputService.JumpRequest:Connect(function()
-				if Config.Main.Movement.InfiniteJump and Config.Main.Movement.InfiniteJumpActive then
-					local hum = getHumanoid()
-					if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+				local hum = getHumanoid()
+				if hum then
+					hum:ChangeState(Enum.HumanoidStateType.Jumping)
 				end
 			end)
 		end
@@ -2523,62 +2663,85 @@ function Features.ToggleInfiniteJumpActive()
 	end
 end
 
-------------------------------------------------------------- Movement: No Clip
-function Features.StopNoclip()
-	if Runtime.Noclip.stepConn then Runtime.Noclip.stepConn:Disconnect() Runtime.Noclip.stepConn = nil end
-	if Runtime.Noclip.addedConn then Runtime.Noclip.addedConn:Disconnect() Runtime.Noclip.addedConn = nil end
-	for part, state in pairs(Runtime.Noclip.original) do
-		if part and part.Parent then part.CanCollide = state end
+------------------------------------------------------------- Movement: Noclip
+function Features.SetNoclipMaster(enabled)
+	Config.Main.Movement.Noclip = enabled
+	if not enabled then
+		Features.StopNoclip()
 	end
-	table.clear(Runtime.Noclip.original)
-	table.clear(Runtime.Noclip.cache)
 end
 
 function Features.StartNoclip()
-	Features.StopNoclip()
-	local char = getChar()
-	if not char then return end
-	for _, part in pairs(char:GetDescendants()) do
-		if part:IsA("BasePart") then
-			table.insert(Runtime.Noclip.cache, part)
-			if Runtime.Noclip.original[part] == nil then Runtime.Noclip.original[part] = part.CanCollide end
-		end
-	end
-	Runtime.Noclip.addedConn = char.DescendantAdded:Connect(function(part)
-		if part:IsA("BasePart") then
-			table.insert(Runtime.Noclip.cache, part)
-			if Runtime.Noclip.original[part] == nil then Runtime.Noclip.original[part] = part.CanCollide end
-		end
-	end)
+	if Runtime.Noclip.stepConn then return end
 	Runtime.Noclip.stepConn = RunService.Stepped:Connect(function()
-		if Config.Main.Movement.Noclip and Config.Main.Movement.NoclipActive then
-			for _, part in ipairs(Runtime.Noclip.cache) do
-				if part and part.Parent then part.CanCollide = false end
+		local c = player.Character
+		if c and Runtime.Noclip.active and Config.Main.Movement.Noclip then
+			for _, part in ipairs(c:GetDescendants()) do
+				if part:IsA("BasePart") and part.CanCollide then
+					part.CanCollide = false
+				end
 			end
 		end
 	end)
 end
 
-function Features.SetNoclipMaster(enabled)
-	Config.Main.Movement.Noclip = enabled
-	Config.Main.Movement.NoclipActive = false
-	Features.StopNoclip()
-	RATAHUB:Notify({
-		Title = "No Clip",
-		Content = enabled and ("Permitido (" .. Config.Main.Movement.NoclipKeybind .. " para activar)") or "Deshabilitado",
-		Duration = 1.2
-	})
+function Features.StopNoclip()
+	if Runtime.Noclip.stepConn then
+		Runtime.Noclip.stepConn:Disconnect()
+		Runtime.Noclip.stepConn = nil
+	end
+	Runtime.Noclip.active = false
+	local c = player.Character
+	if c then
+		for _, part in ipairs(c:GetDescendants()) do
+			if part:IsA("BasePart") and part.Name == "HumanoidRootPart" then
+				part.CanCollide = false
+			elseif part:IsA("BasePart") then
+				part.CanCollide = true
+			end
+		end
+	end
 end
 
 function Features.ToggleNoclipActive()
 	if not Config.Main.Movement.Noclip then return end
-	Config.Main.Movement.NoclipActive = not Config.Main.Movement.NoclipActive
-	if Config.Main.Movement.NoclipActive then
+	Runtime.Noclip.active = not Runtime.Noclip.active
+	if Runtime.Noclip.active then
 		Features.StartNoclip()
-		RATAHUB:Notify({ Title = "No Clip", Content = "Activo", Duration = 1.2 })
+		RATAHUB:Notify({ Title = "Noclip", Content = "Activo", Duration = 1.2 })
 	else
 		Features.StopNoclip()
-		RATAHUB:Notify({ Title = "No Clip", Content = "En pausa", Duration = 1.2 })
+		RATAHUB:Notify({ Title = "Noclip", Content = "En pausa", Duration = 1.2 })
+	end
+end
+
+------------------------------------------------------------- Utility: Anti-AFK
+function Features.SetAntiAFK(enabled)
+	Config.Main.Utility.AntiAFK = enabled
+	if enabled then
+		if not Runtime.AntiAFK.conn then
+			Runtime.AntiAFK.conn = player.Idled:Connect(function()
+				if VirtualUser then
+					pcall(function()
+						VirtualUser:CaptureController()
+						VirtualUser:ClickButton2(Vector2.new())
+					end)
+				end
+			end)
+		end
+	else
+		if Runtime.AntiAFK.conn then
+			Runtime.AntiAFK.conn:Disconnect()
+			Runtime.AntiAFK.conn = nil
+		end
+	end
+end
+
+------------------------------------------------------------- Utility: Reset Character
+function Features.ResetCharacter()
+	local hum = getHumanoid()
+	if hum then
+		hum.Health = 0
 	end
 end
 
@@ -2650,111 +2813,66 @@ function Features.ToggleHitboxLoop(enable)
 	end
 end
 
+------------------------------------------------------------- DESTROY HUB
 function Features.DestroyHub()
 	Features.StopFly()
 	Features.StopWalkSpeed()
 	Features.StopJumpPower()
 	Features.StopGravity()
-	Features.StopInfiniteJump()
+	Features.SetInfiniteJumpMaster(false)
 	Features.StopNoclip()
-	Features.SetClickTP(false)
-	Features.SetBTools(false)
-	Features.SetXRay(false)
-	Features.SetFullbright(false)
-	Features.SetAntiFling(false)
 	Features.SetAntiAFK(false)
-	Features.RestoreHitboxes()
+	Features.ToggleHitboxLoop(false)
+	Features.SetTriggerbotActive(false)
+	Config.Triggerbot.Enabled = false
 
-	if Runtime.ESP.loop then Runtime.ESP.loop:Disconnect() Runtime.ESP.loop = nil end
-	if Runtime.Aimlock.loop then Runtime.Aimlock.loop:Disconnect() Runtime.Aimlock.loop = nil end
-	if Runtime.Hotkeys.conn then Runtime.Hotkeys.conn:Disconnect() Runtime.Hotkeys.conn = nil end
-
-	local hum = getHumanoid()
-	if hum then
-		hum.WalkSpeed = 16
-		hum.JumpPower = 50
+	if Runtime.Hotkeys.conn then
+		Runtime.Hotkeys.conn:Disconnect()
+		Runtime.Hotkeys.conn = nil
 	end
-	workspace.Gravity = 196.2
+	if Runtime.ESP.loop then
+		Runtime.ESP.loop:Disconnect()
+		Runtime.ESP.loop = nil
+	end
+	if Runtime.ESP.container then
+		Runtime.ESP.container:Destroy()
+		Runtime.ESP.container = nil
+	end
+	for _, entry in pairs(Runtime.ESP.objects) do
+		if entry.Highlight then entry.Highlight:Destroy() end
+		if entry.Billboard then entry.Billboard:Destroy() end
+		if entry.Tracer then entry.Tracer:Remove() end
+	end
+	table.clear(Runtime.ESP.objects)
 
-	local cam = workspace.CurrentCamera
-	if cam then
-		cam.FieldOfView = 70
-		cam.CameraType = Enum.CameraType.Custom
+	if Runtime.Aimlock.loop then
+		Runtime.Aimlock.loop:Disconnect()
+		Runtime.Aimlock.loop = nil
+	end
+	Features.UnlockAimlock()
+
+	if Runtime.Camera.freecamLoop then
+		Runtime.Camera.freecamLoop:Disconnect()
+		Runtime.Camera.freecamLoop = nil
+	end
+	if Runtime.ClickTP.conn then
+		Runtime.ClickTP.conn:Disconnect()
+		Runtime.ClickTP.conn = nil
 	end
 
-	if screenGui then
-		screenGui:Destroy()
-	end
+	local sGui = playerGui:FindFirstChild("RATAHUB_V5_GUI")
+	if sGui then sGui:Destroy() end
+
+	RATAHUB:Notify({ Title = "Destroy Hub", Content = "RATAHUB V5 apagado y limpiado completamente.", Duration = 2 })
 end
 
-function Features.ResetCharacter()
-	pcall(function()
-		local char = getChar()
-		if char then char:BreakJoints() end
+------------------------------------------------------------- Dynamic Helpers: Whitelist & Teams
+function Features.IsFriend(targetPlayer)
+	if not targetPlayer then return false end
+	local success, result = pcall(function()
+		return player:IsFriendsWith(targetPlayer.UserId)
 	end)
-	RATAHUB:Notify({ Title = "Reset", Content = "Reiniciando personaje...", Duration = 1.5 })
-end
-
-------------------------------------------------------------- Utility: Server Hop / Rejoin / Anti-AFK
-function Features.ServerHop()
-	local want = Config.Main.Utility.TargetServerPlayers
-	RATAHUB:Notify({ Title = "Server Finder", Content = "Buscando servidor con " .. want .. " jugadores...", Duration = 3 })
-	task.spawn(function()
-		local ok, result = pcall(function()
-			return HttpService:JSONDecode(game:HttpGet(
-				"https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"))
-		end)
-		if ok and result and result.data then
-			for _, s in ipairs(result.data) do
-				if s.playing and s.playing == want and s.id ~= game.JobId then
-					TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, player)
-					return
-				end
-			end
-			for _, s in ipairs(result.data) do
-				if s.playing and s.playing <= want and s.id ~= game.JobId then
-					TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, player)
-					return
-				end
-			end
-			RATAHUB:Notify({ Title = "Server Finder", Content = "No se encontró servidor con esa cantidad", Duration = 3 })
-		else
-			RATAHUB:Notify({ Title = "Error", Content = "Falló la consulta de servidores", Duration = 2 })
-		end
-	end)
-end
-
-function Features.SetAntiAFK(enabled)
-	if enabled and not Runtime.AntiAFK.conn then
-		Runtime.AntiAFK.conn = player.Idled:Connect(function()
-			VirtualUser:ClickButton2(Vector2.zero)
-		end)
-		RATAHUB:Notify({ Title = "Anti-AFK", Content = "Activado", Duration = 1.5 })
-	elseif not enabled and Runtime.AntiAFK.conn then
-		Runtime.AntiAFK.conn:Disconnect()
-		Runtime.AntiAFK.conn = nil
-		RATAHUB:Notify({ Title = "Anti-AFK", Content = "Desactivado", Duration = 1.5 })
-	end
-end
-
-function Features.Rejoin()
-	RATAHUB:Notify({ Title = "Rejoin", Content = "Reconectando al mismo servidor...", Duration = 2 })
-	TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player)
-end
-
-------------------------------------------------------------- ESP MODULE
-function Features.GetESPColor(targetPlayer)
-	local espCfg = Config.ESP
-	if espCfg.FriendCheck and Features.IsFriend(targetPlayer) then
-		return ESP_GREEN
-	end
-	if espCfg.RainbowESP then
-		return Color3.fromHSV((tick() % 5) / 5, 1, 1)
-	end
-	if espCfg.TeamColorHighlight and targetPlayer.TeamColor then
-		return targetPlayer.TeamColor.Color
-	end
-	return COLOR_MAP[espCfg.HighlightColor] or ESP_PURPLE
+	return success and result or false
 end
 
 function Features.IsWhitelisted(targetPlayer, mode, target)
@@ -2800,34 +2918,58 @@ function Features.IsPlayerValidESP(targetPlayer)
 		return false
 	end
 
-	-- Team Check Filtering
-	if espCfg.IgnoreTeams ~= "Ninguno" and targetPlayer.Team then
-		if targetPlayer.Team.Name == espCfg.IgnoreTeams then return false end
+	-- Friend Check
+	if espCfg.FriendCheck and Features.IsFriend(targetPlayer) then
+		return false
+	end
+
+	-- Team Filtering
+	if espCfg.IgnoreTeams ~= "Ninguno" and targetPlayer.Team and targetPlayer.Team.Name == espCfg.IgnoreTeams then
+		return false
 	end
 
 	return true
 end
 
-function Features.UpdateESP()
-	if not Runtime.ESP.container then
-		Runtime.ESP.container = create("Folder", { Name = "RATAHUB_ESP", Parent = screenGui })
-	end
-
+function Features.GetESPColor(targetPlayer)
 	local espCfg = Config.ESP
-	local isAnyActive = espCfg.Highlight or espCfg.Names or espCfg.Details or espCfg.Tracers
+	if espCfg.TeamColorHighlight and targetPlayer.TeamColor then
+		return targetPlayer.TeamColor.Color
+	end
+	local colorMap = {
+		["Morado"] = ESP_PURPLE,
+		["Rojo"] = ESP_RED,
+		["Azul"] = Color3.fromRGB(59, 130, 246),
+		["Verde Neon"] = ESP_GREEN,
+		["Cyan"] = Color3.fromRGB(6, 182, 212),
+		["Blanco"] = Color3.fromRGB(255, 255, 255),
+	}
+	return colorMap[espCfg.HighlightColor] or THEME.Primary
+end
 
-	if not isAnyActive then
+------------------------------------------------------------- ESP MODULE
+function Features.UpdateESP()
+	local espCfg = Config.ESP
+	local anyEnabled = espCfg.Highlight or espCfg.Names or espCfg.Details or espCfg.Tracers
+
+	if not anyEnabled then
 		if Runtime.ESP.loop then
 			Runtime.ESP.loop:Disconnect()
 			Runtime.ESP.loop = nil
 		end
-		for _, obj in pairs(Runtime.ESP.objects) do
-			if obj.Highlight then obj.Highlight:Destroy() end
-			if obj.Billboard then obj.Billboard:Destroy() end
-			if obj.Tracer then obj.Tracer:Destroy() end
+		for _, entry in pairs(Runtime.ESP.objects) do
+			if entry.Highlight then entry.Highlight.Enabled = false end
+			if entry.Billboard then entry.Billboard.Enabled = false end
+			if entry.Tracer then entry.Tracer.Visible = false end
 		end
-		table.clear(Runtime.ESP.objects)
 		return
+	end
+
+	if not Runtime.ESP.container then
+		local f = Instance.new("Folder")
+		f.Name = "RATAHUB_ESP"
+		f.Parent = workspace
+		Runtime.ESP.container = f
 	end
 
 	if not Runtime.ESP.loop then
@@ -2838,8 +2980,8 @@ function Features.UpdateESP()
 			for _, p in ipairs(Players:GetPlayers()) do
 				if p ~= player and p.Character then
 					local char = p.Character
-					local root = char:FindFirstChild("HumanoidRootPart")
 					local hum = char:FindFirstChildOfClass("Humanoid")
+					local root = char:FindFirstChild("HumanoidRootPart")
 					local valid = Features.IsPlayerValidESP(p)
 
 					local entry = Runtime.ESP.objects[p]
@@ -2848,7 +2990,6 @@ function Features.UpdateESP()
 						Runtime.ESP.objects[p] = entry
 					end
 
-					local isFriend = Features.IsFriend(p)
 					local color = Features.GetESPColor(p)
 
 					-- 1. Highlight
@@ -2901,59 +3042,47 @@ function Features.UpdateESP()
 						if espCfg.Details then
 							local dist = math.floor((cam.CFrame.Position - root.Position).Magnitude)
 							local hp = math.floor(hum.Health)
-							entry.Label.Text = string.format("%s\n[%d studs] [%d HP]", p.Name, dist, hp)
+							entry.Label.Text = string.format("%s\n[%d HP] [%d studs]", p.DisplayName, hp, dist)
 						else
-							entry.Label.Text = p.Name
+							entry.Label.Text = p.DisplayName
 						end
 					elseif entry.Billboard then
 						entry.Billboard.Enabled = false
 					end
 
-					-- 3. Tracers
-					if espCfg.Tracers and valid and hum and hum.Health > 0 and root then
-						local screenPos, onScreen = cam:WorldToViewportPoint(root.Position)
+					-- 3. Tracers (Drawing API if supported)
+					if espCfg.Tracers and valid and hum and hum.Health > 0 and root and Drawing then
+						if not entry.Tracer then
+							entry.Tracer = Drawing.new("Line")
+							entry.Tracer.Thickness = 1.5
+							entry.Tracer.Transparency = 1
+						end
+
+						local rootPos, onScreen = cam:WorldToViewportPoint(root.Position)
 						if onScreen then
-							if not entry.Tracer then
-								local line = Instance.new("Frame")
-								line.AnchorPoint = Vector2.new(0.5, 0.5)
-								line.BorderSizePixel = 0
-								line.ZIndex = 40
-								line.Parent = Runtime.ESP.container
-								entry.Tracer = line
+							local originPos = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
+							if espCfg.TracerOrigin == "Center" then
+								originPos = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+							elseif espCfg.TracerOrigin == "Mouse" then
+								originPos = UserInputService:GetMouseLocation()
 							end
 
-							local fromPos
-							if espCfg.TracerOrigin == "Mouse" then
-								local m = UserInputService:GetMouseLocation()
-								fromPos = Vector2.new(m.X, m.Y)
-							elseif espCfg.TracerOrigin == "Center" then
-								fromPos = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
-							else
-								fromPos = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
-							end
-
-							local toPos = Vector2.new(screenPos.X, screenPos.Y)
-							local dist = (toPos - fromPos).Magnitude
-							local center = (toPos + fromPos) / 2
-							local angle = math.atan2(toPos.Y - fromPos.Y, toPos.X - fromPos.X)
-
-							entry.Tracer.Size = UDim2.fromOffset(dist, 1.5)
-							entry.Tracer.Position = UDim2.fromOffset(center.X, center.Y)
-							entry.Tracer.Rotation = math.deg(angle)
-
-							if isFriend and espCfg.FriendCheck then
-								entry.Tracer.BackgroundColor3 = ESP_GREEN
-							elseif espCfg.TeamColorTracers and p.TeamColor then
-								entry.Tracer.BackgroundColor3 = p.TeamColor.Color
-							else
-								entry.Tracer.BackgroundColor3 = ESP_RED
-							end
+							entry.Tracer.From = originPos
+							entry.Tracer.To = Vector2.new(rootPos.X, rootPos.Y)
+							entry.Tracer.Color = espCfg.TeamColorTracers and (p.TeamColor and p.TeamColor.Color or color) or color
 							entry.Tracer.Visible = true
-						elseif entry.Tracer then
+						else
 							entry.Tracer.Visible = false
 						end
 					elseif entry.Tracer then
 						entry.Tracer.Visible = false
+					end
+				else
+					local entry = Runtime.ESP.objects[p]
+					if entry then
+						if entry.Highlight then entry.Highlight.Enabled = false end
+						if entry.Billboard then entry.Billboard.Enabled = false end
+						if entry.Tracer then entry.Tracer.Visible = false end
 					end
 				end
 			end
@@ -2961,7 +3090,7 @@ function Features.UpdateESP()
 	end
 end
 
-------------------------------------------------------------- AIMLOCK MODULE (Persistent Target System)
+------------------------------------------------------------- AIMLOCK MODULE
 function Features.FindBestAimlockTarget()
 	local aimCfg = Config.Aimlock
 	local cam = workspace.CurrentCamera
@@ -2992,7 +3121,7 @@ function Features.FindBestAimlockTarget()
 				end
 
 				-- Team Check
-				if aimCfg.TeamCheck and p.Team and player.Team and p.Team == player.Team then
+				if aimCfg.TeamCheck and Features.IsSameTeam(p) then
 					isValid = false
 				end
 				if aimCfg.IgnoreTeams ~= "Ninguno" and p.Team and p.Team.Name == aimCfg.IgnoreTeams then
@@ -3047,6 +3176,9 @@ function Features.ToggleAimlockLock()
 		if candidate then
 			Runtime.Aimlock.currentTarget = candidate
 			Runtime.Aimlock.locked = true
+			if Config.Sounds.LockSound and Config.Sounds.LockTargetSound then
+				Features.PlaySound(Config.Sounds.LockTargetSound)
+			end
 			RATAHUB:Notify({ Title = "Aimlock", Content = "Lockeaste a " .. candidate.Name, Duration = 1.5 })
 		else
 			RATAHUB:Notify({ Title = "Aimlock", Content = "No hay nadie para lockear", Duration = 1.5 })
@@ -3095,7 +3227,6 @@ function Features.UpdateAimlock()
 			local targetPlayer = Runtime.Aimlock.currentTarget
 			local targetName = targetPlayer.Name
 
-			-- Check if target is still in the game
 			if not targetPlayer.Parent then
 				Features.UnlockAimlock("left", targetName)
 				return
@@ -3135,37 +3266,28 @@ function Features.UpdateAimlock()
 			local smooth = math.clamp(1 - (Config.Aimlock.Smoothness / 100), 0.05, 1)
 			cam.CFrame = cam.CFrame:Lerp(targetCF, smooth)
 
-			-- Aimlock Tracer
-			if Config.Aimlock.EnemyTracers and root then
-				local screenPos, onScreen = cam:WorldToViewportPoint(root.Position)
+			-- Enemy Tracer
+			if Config.Aimlock.EnemyTracers and Drawing then
+				if not Runtime.Aimlock.tracer then
+					Runtime.Aimlock.tracer = Drawing.new("Line")
+					Runtime.Aimlock.tracer.Thickness = 1.5
+					Runtime.Aimlock.tracer.Color = THEME.Primary
+					Runtime.Aimlock.tracer.Transparency = 1
+				end
+
+				local screenPos, onScreen = cam:WorldToViewportPoint(part.Position)
 				if onScreen then
-					if not Runtime.Aimlock.tracer then
-						Runtime.Aimlock.tracer = Instance.new("Frame")
-						Runtime.Aimlock.tracer.AnchorPoint = Vector2.new(0.5, 0.5)
-						Runtime.Aimlock.tracer.BorderSizePixel = 0
-						Runtime.Aimlock.tracer.ZIndex = 45
-						Runtime.Aimlock.tracer.Parent = screenGui
+					local originPos = UserInputService:GetMouseLocation()
+					if Config.Aimlock.TracerOrigin == "Center" then
+						originPos = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+					elseif Config.Aimlock.TracerOrigin == "Bottom" then
+						originPos = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
 					end
 
-					local fromPos
-					if Config.Aimlock.TracerOrigin == "Mouse" then
-						local m = UserInputService:GetMouseLocation()
-						fromPos = Vector2.new(m.X, m.Y)
-					else
-						fromPos = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
-					end
-
-					local toPos = Vector2.new(screenPos.X, screenPos.Y)
-					local dist = (toPos - fromPos).Magnitude
-					local center = (toPos + fromPos) / 2
-					local angle = math.atan2(toPos.Y - fromPos.Y, toPos.X - fromPos.X)
-
-					Runtime.Aimlock.tracer.Size = UDim2.fromOffset(dist, 1.5)
-					Runtime.Aimlock.tracer.Position = UDim2.fromOffset(center.X, center.Y)
-					Runtime.Aimlock.tracer.Rotation = math.deg(angle)
-					Runtime.Aimlock.tracer.BackgroundColor3 = ESP_RED
+					Runtime.Aimlock.tracer.From = originPos
+					Runtime.Aimlock.tracer.To = Vector2.new(screenPos.X, screenPos.Y)
 					Runtime.Aimlock.tracer.Visible = true
-				elseif Runtime.Aimlock.tracer then
+				else
 					Runtime.Aimlock.tracer.Visible = false
 				end
 			elseif Runtime.Aimlock.tracer then
@@ -3175,11 +3297,110 @@ function Features.UpdateAimlock()
 	end
 end
 
-------------------------------------------------------------- Extras: Camera & Freecam
+------------------------------------------------------------- TRIGGERBOT MODULE
+function Features.SetTriggerbotMaster(enabled)
+	Config.Triggerbot.Enabled = enabled
+	if not enabled then
+		Features.SetTriggerbotActive(false)
+	end
+end
+
+function Features.SetTriggerbotActive(active)
+	if active and not Config.Triggerbot.Enabled then return end
+	Config.Triggerbot.Active = active
+	Runtime.Triggerbot.active = active
+
+	if active then
+		if Runtime.Triggerbot.loop then return end
+		Runtime.Triggerbot.loop = RunService.RenderStepped:Connect(function()
+			if not Config.Triggerbot.Enabled or not Runtime.Triggerbot.active then
+				Features.SetTriggerbotActive(false)
+				return
+			end
+			if Runtime.Triggerbot.isShooting then return end
+
+			local cam = workspace.CurrentCamera
+			if not cam then return end
+
+			local mousePos = UserInputService:GetMouseLocation()
+			local mouseRay = cam:ViewportPointToRay(mousePos.X, mousePos.Y)
+
+			local raycastParams = RaycastParams.new()
+			raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+			local ignoreList = { player.Character }
+			if Runtime.ESP and Runtime.ESP.container then
+				table.insert(ignoreList, Runtime.ESP.container)
+			end
+			raycastParams.FilterDescendantsInstances = ignoreList
+
+			local result = workspace:Raycast(mouseRay.Origin, mouseRay.Direction * 1000, raycastParams)
+			if result and result.Instance then
+				local hitPart = result.Instance
+				local targetChar = hitPart:FindFirstAncestorOfClass("Model")
+				if targetChar then
+					local targetPlayer = Players:GetPlayerFromCharacter(targetChar)
+					if targetPlayer and targetPlayer ~= player then
+						local hum = targetChar:FindFirstChildOfClass("Humanoid")
+						if hum and hum.Health > 0 then
+							local isValid = true
+							if Config.Triggerbot.TeamCheck and Features.IsSameTeam(targetPlayer) then
+								isValid = false
+							end
+							if Config.Triggerbot.IgnoreTeams ~= "Ninguno" and targetPlayer.Team and targetPlayer.Team.Name == Config.Triggerbot.IgnoreTeams then
+								isValid = false
+							end
+							if not Features.IsWhitelisted(targetPlayer, Config.Triggerbot.WhitelistMode, Config.Triggerbot.WhitelistTarget) then
+								isValid = false
+							end
+
+							if isValid then
+								Runtime.Triggerbot.isShooting = true
+								task.spawn(function()
+									if Config.Sounds.HitSound and Config.Sounds.HitShootSound then
+										Features.PlaySound(Config.Sounds.HitShootSound)
+									end
+									if mouse1click then
+										pcall(mouse1click)
+									elseif VirtualUser then
+										pcall(function()
+											VirtualUser:CaptureController()
+											VirtualUser:ClickButton1(Vector2.new(mousePos.X, mousePos.Y))
+										end)
+									end
+									local delaySec = (Config.Triggerbot.Delay or 50) / 1000
+									task.wait(delaySec)
+									Runtime.Triggerbot.isShooting = false
+								end)
+							end
+						end
+					end
+				end
+			end
+		end)
+	else
+		if Runtime.Triggerbot.loop then
+			Runtime.Triggerbot.loop:Disconnect()
+			Runtime.Triggerbot.loop = nil
+		end
+		Runtime.Triggerbot.isShooting = false
+	end
+end
+
+function Features.ToggleTriggerbotActive()
+	if not Config.Triggerbot.Enabled then return end
+	Features.SetTriggerbotActive(not Runtime.Triggerbot.active)
+	if Runtime.Triggerbot.active then
+		RATAHUB:Notify({ Title = "Triggerbot", Content = "Activado", Duration = 1.2 })
+	else
+		RATAHUB:Notify({ Title = "Triggerbot", Content = "Desactivado", Duration = 1.2 })
+	end
+end
+
+------------------------------------------------------------- EXTRAS: Camera & Vision
 function Features.SetUnlockMaxDistance(enabled)
 	if enabled then
-		Runtime.Camera.savedMaxZoom = Runtime.Camera.savedMaxZoom or player.CameraMaxZoomDistance
-		player.CameraMaxZoomDistance = 1e9
+		Runtime.Camera.savedMaxZoom = player.CameraMaxZoomDistance
+		player.CameraMaxZoomDistance = 99999
 	else
 		player.CameraMaxZoomDistance = Runtime.Camera.savedMaxZoom or 128
 	end
@@ -3187,247 +3408,182 @@ end
 
 function Features.SetFOVChanger(enabled)
 	if enabled then
-		if Runtime.Camera.fovLoop then return end
-		Runtime.Camera.savedFOV = Runtime.Camera.savedFOV or (workspace.CurrentCamera and workspace.CurrentCamera.FieldOfView) or DEFAULT_FOV
-		Runtime.Camera.fovLoop = RunService.RenderStepped:Connect(function()
-			if Config.Extras.Camera.FOVChanger then
-				local cam = workspace.CurrentCamera
-				if cam then cam.FieldOfView = Config.Extras.Camera.FOV end
-			end
-		end)
+		Runtime.Camera.savedFOV = workspace.CurrentCamera.FieldOfView
+		if not Runtime.Camera.fovLoop then
+			Runtime.Camera.fovLoop = RunService.RenderStepped:Connect(function()
+				if Config.Extras.Camera.FOVChanger then
+					workspace.CurrentCamera.FieldOfView = Config.Extras.Camera.FOV
+				end
+			end)
+		end
 	else
-		if Runtime.Camera.fovLoop then Runtime.Camera.fovLoop:Disconnect() Runtime.Camera.fovLoop = nil end
-		local cam = workspace.CurrentCamera
-		if cam then cam.FieldOfView = Runtime.Camera.savedFOV or DEFAULT_FOV end
-	end
-end
-
-function Features.StartFreecam()
-	if Runtime.Camera.freecamLoop then return end
-	local cam = workspace.CurrentCamera
-	if not cam then return end
-
-	local root = getRoot()
-	if root then
-		Runtime.Camera.wasAnchored = root.Anchored
-		root.Anchored = true
-	end
-
-	Runtime.Camera.savedType = cam.CameraType
-	Runtime.Camera.savedSubject = cam.CameraSubject
-	cam.CameraType = Enum.CameraType.Scriptable
-
-	local keys = Runtime.Camera.keys
-	table.clear(keys)
-
-	Runtime.Camera.freecamBegan = UserInputService.InputBegan:Connect(function(input, gp)
-		if gp then return end
-		if input.UserInputType == Enum.UserInputType.Keyboard then
-			keys[input.KeyCode] = true
+		if Runtime.Camera.fovLoop then
+			Runtime.Camera.fovLoop:Disconnect()
+			Runtime.Camera.fovLoop = nil
 		end
-	end)
-	Runtime.Camera.freecamEnded = UserInputService.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.Keyboard then
-			keys[input.KeyCode] = nil
-		end
-	end)
-
-	Runtime.Camera.freecamLoop = RunService.RenderStepped:Connect(function(dt)
-		local c = workspace.CurrentCamera
-		if not c then return end
-		local move = Vector3.zero
-		if keys[Enum.KeyCode.W] then move += Vector3.new(0, 0, -1) end
-		if keys[Enum.KeyCode.S] then move += Vector3.new(0, 0, 1) end
-		if keys[Enum.KeyCode.A] then move += Vector3.new(-1, 0, 0) end
-		if keys[Enum.KeyCode.D] then move += Vector3.new(1, 0, 0) end
-		if keys[Enum.KeyCode.E] then move += Vector3.new(0, 1, 0) end
-		if keys[Enum.KeyCode.Q] then move += Vector3.new(0, -1, 0) end
-
-		local speedMultiplier = Config.Extras.Camera.FreecamSpeed or 10
-		local speed = (keys[Enum.KeyCode.LeftShift] and (speedMultiplier * 5) or (speedMultiplier * 2)) * dt * 10
-		c.CFrame = c.CFrame * CFrame.new(move * speed)
-	end)
-end
-
-function Features.StopFreecam()
-	if Runtime.Camera.freecamLoop then Runtime.Camera.freecamLoop:Disconnect() Runtime.Camera.freecamLoop = nil end
-	if Runtime.Camera.freecamBegan then Runtime.Camera.freecamBegan:Disconnect() Runtime.Camera.freecamBegan = nil end
-	if Runtime.Camera.freecamEnded then Runtime.Camera.freecamEnded:Disconnect() Runtime.Camera.freecamEnded = nil end
-	table.clear(Runtime.Camera.keys)
-
-	local root = getRoot()
-	if root then
-		root.Anchored = Runtime.Camera.wasAnchored or false
-	end
-
-	local cam = workspace.CurrentCamera
-	if cam then
-		cam.CameraType = Runtime.Camera.savedType or Enum.CameraType.Custom
-		if Runtime.Camera.savedSubject then
-			cam.CameraSubject = Runtime.Camera.savedSubject
-		else
-			local hum = getHumanoid()
-			if hum then cam.CameraSubject = hum end
-		end
+		workspace.CurrentCamera.FieldOfView = Runtime.Camera.savedFOV or 70
 	end
 end
 
 function Features.SetFreecam(enabled)
-	if enabled then
-		Features.StartFreecam()
-		RATAHUB:Notify({ Title = "Freecam", Content = "Activado (Personaje bloqueado)", Duration = 1.5 })
-	else
-		Features.StopFreecam()
-		RATAHUB:Notify({ Title = "Freecam", Content = "Desactivado (Cámara restaurada)", Duration = 1.5 })
-	end
-end
+	local cam = workspace.CurrentCamera
+	local root = getRoot()
+	if not cam then return end
 
-------------------------------------------------------------- Extras: Vision (X-Ray)
-function Features.SetXRay(enabled)
 	if enabled then
-		Runtime.Vision.xrayCache = Runtime.Vision.xrayCache or {}
-		for _, obj in ipairs(workspace:GetDescendants()) do
-			if obj:IsA("BasePart") and not (player.Character and obj:IsDescendantOf(player.Character)) then
-				if obj.Transparency < 0.5 then
-					Runtime.Vision.xrayCache[obj] = obj.Transparency
-					obj.Transparency = 0.65
-				end
-			end
-		end
-		RATAHUB:Notify({ Title = "X-Ray", Content = "Activado", Duration = 1.2 })
-	else
-		if Runtime.Vision.xrayCache then
-			for part, origTrans in pairs(Runtime.Vision.xrayCache) do
-				if part and part.Parent then
-					part.Transparency = origTrans
-				end
-			end
-			table.clear(Runtime.Vision.xrayCache)
-		end
-		RATAHUB:Notify({ Title = "X-Ray", Content = "Desactivado", Duration = 1.2 })
-	end
-end
+		Runtime.Camera.savedType = cam.CameraType
+		Runtime.Camera.savedSubject = cam.CameraSubject
+		cam.CameraType = Enum.CameraType.Scriptable
 
-------------------------------------------------------------- Extras: Tools (Click TP / BTools)
-function Features.SetClickTP(enabled)
-	Config.Extras.Tools.ClickTP = enabled
-	if enabled then
-		if Runtime.ClickTP.conn then return end
-		local mouse = player:GetMouse()
-		Runtime.ClickTP.conn = mouse.Button1Down:Connect(function()
-			if not Config.Extras.Tools.ClickTP then return end
-			local root = getRoot()
-			if root and mouse.Hit then
-				root.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0))
+		if root then
+			Runtime.Camera.wasAnchored = root.Anchored
+			root.Anchored = true
+		end
+
+		Runtime.Camera.freecamBegan = UserInputService.InputBegan:Connect(function(input, gp)
+			if gp then return end
+			if input.UserInputType == Enum.UserInputType.Keyboard then
+				Runtime.Camera.keys[input.KeyCode] = true
 			end
 		end)
-		RATAHUB:Notify({ Title = "Click TP", Content = "Activado (Haz clic para teletransportar)", Duration = 1.5 })
+		Runtime.Camera.freecamEnded = UserInputService.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.Keyboard then
+				Runtime.Camera.keys[input.KeyCode] = nil
+			end
+		end)
+
+		Runtime.Camera.freecamLoop = RunService.RenderStepped:Connect(function()
+			local speed = Config.Extras.Camera.FreecamSpeed or 10
+			local dir = Vector3.zero
+			local keys = Runtime.Camera.keys
+
+			if keys[Enum.KeyCode.W] then dir = dir + cam.CFrame.LookVector end
+			if keys[Enum.KeyCode.S] then dir = dir - cam.CFrame.LookVector end
+			if keys[Enum.KeyCode.A] then dir = dir - cam.CFrame.RightVector end
+			if keys[Enum.KeyCode.D] then dir = dir + cam.CFrame.RightVector end
+			if keys[Enum.KeyCode.E] then dir = dir + Vector3.new(0, 1, 0) end
+			if keys[Enum.KeyCode.Q] then dir = dir - Vector3.new(0, 1, 0) end
+
+			if dir.Magnitude > 0 then
+				cam.CFrame = cam.CFrame + (dir.Unit * (speed * 0.1))
+			end
+		end)
+	else
+		if Runtime.Camera.freecamLoop then
+			Runtime.Camera.freecamLoop:Disconnect()
+			Runtime.Camera.freecamLoop = nil
+		end
+		if Runtime.Camera.freecamBegan then
+			Runtime.Camera.freecamBegan:Disconnect()
+			Runtime.Camera.freecamBegan = nil
+		end
+		if Runtime.Camera.freecamEnded then
+			Runtime.Camera.freecamEnded:Disconnect()
+			Runtime.Camera.freecamEnded = nil
+		end
+		table.clear(Runtime.Camera.keys)
+
+		cam.CameraType = Runtime.Camera.savedType or Enum.CameraType.Custom
+		cam.CameraSubject = Runtime.Camera.savedSubject or (player.Character and player.Character:FindFirstChildOfClass("Humanoid"))
+		if root and Runtime.Camera.wasAnchored ~= nil then
+			root.Anchored = Runtime.Camera.wasAnchored
+		end
+	end
+end
+
+function Features.SetXRay(enabled)
+	if enabled then
+		for _, part in ipairs(workspace:GetDescendants()) do
+			if part:IsA("BasePart") and not part:IsDescendantOf(player.Character) and not part.Parent:FindFirstChildOfClass("Humanoid") then
+				if not Runtime.XRay.parts[part] then
+					Runtime.XRay.parts[part] = part.Transparency
+				end
+				part.Transparency = 0.65
+			end
+		end
+	else
+		for part, orig in pairs(Runtime.XRay.parts) do
+			if part and part.Parent then
+				part.Transparency = orig
+			end
+		end
+		table.clear(Runtime.XRay.parts)
+	end
+end
+
+function Features.SetClickTP(enabled)
+	if enabled then
+		if not Runtime.ClickTP.conn then
+			Runtime.ClickTP.conn = UserInputService.InputBegan:Connect(function(input, gp)
+				if gp then return end
+				if input.UserInputType == Enum.UserInputType.MouseButton1 and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+					local mouse = player:GetMouse()
+					if mouse and mouse.Hit and getRoot() then
+						getRoot().CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0))
+					end
+				end
+			end)
+		end
 	else
 		if Runtime.ClickTP.conn then
 			Runtime.ClickTP.conn:Disconnect()
 			Runtime.ClickTP.conn = nil
 		end
-		RATAHUB:Notify({ Title = "Click TP", Content = "Desactivado", Duration = 1.2 })
 	end
 end
 
 function Features.SetBTools(enabled)
-	Config.Extras.Tools.BTools = enabled
 	if enabled then
 		local backpack = player:FindFirstChildOfClass("Backpack")
 		if backpack then
-			Runtime.Tools.btoolsList = Runtime.Tools.btoolsList or {}
-			local ok, bin = pcall(function() return Instance.new("HopperBin") end)
-			if ok and bin then
-				bin.BinType = Enum.BinType.Hammer
-				bin.Name = "Delete"
-				bin.Parent = backpack
-				table.insert(Runtime.Tools.btoolsList, bin)
-			end
+			local b1 = Instance.new("HopperBin")
+			b1.BinType = Enum.BinType.Clone
+			b1.Parent = backpack
+
+			local b2 = Instance.new("HopperBin")
+			b2.BinType = Enum.BinType.Hammer
+			b2.Parent = backpack
+
+			local b3 = Instance.new("HopperBin")
+			b3.BinType = Enum.BinType.Grab
+			b3.Parent = backpack
 		end
-		RATAHUB:Notify({ Title = "BTools", Content = "Herramienta Delete equipada", Duration = 1.5 })
-	else
-		if Runtime.Tools.btoolsList then
-			for _, bin in ipairs(Runtime.Tools.btoolsList) do
-				if bin and bin.Parent then bin:Destroy() end
-			end
-			table.clear(Runtime.Tools.btoolsList)
-		end
-		local char = getChar()
-		if char then
-			for _, item in ipairs(char:GetChildren()) do
-				if item:IsA("HopperBin") and item.BinType == Enum.BinType.Hammer then
-					item:Destroy()
-				end
-			end
-		end
-		RATAHUB:Notify({ Title = "BTools", Content = "Desactivados", Duration = 1.2 })
 	end
 end
 
-------------------------------------------------------------- Extras: Performance (FPS Boost / Anti-Fling)
 function Features.SetFPSBoost(enabled)
 	if enabled then
 		pcall(function()
-			Runtime.Performance.savedLighting = Runtime.Performance.savedLighting or {
-				GlobalShadows = Lighting.GlobalShadows,
-				FogEnd = Lighting.FogEnd,
-			}
-			Runtime.Performance.savedParticles = Runtime.Performance.savedParticles or {}
-			Lighting.GlobalShadows = false
-			Lighting.FogEnd = 9e9
-			for _, obj in ipairs(workspace:GetDescendants()) do
-				if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Smoke")
-					or obj:IsA("Fire") or obj:IsA("Sparkles") then
-					if obj.Enabled then
-						Runtime.Performance.savedParticles[obj] = true
-						obj.Enabled = false
-					end
-				end
-			end
+			setfpscap(999)
 		end)
-		RATAHUB:Notify({ Title = "FPS Boost", Content = "Activado", Duration = 1.5 })
+		Lighting.GlobalShadows = false
+		Lighting.FogEnd = 9e9
+		settings().Rendering.QualityLevel = 1
 	else
-		pcall(function()
-			local s = Runtime.Performance.savedLighting
-			if s then
-				Lighting.GlobalShadows = s.GlobalShadows
-				Lighting.FogEnd = s.FogEnd
-				Runtime.Performance.savedLighting = nil
-			end
-			if Runtime.Performance.savedParticles then
-				for obj, wasEnabled in pairs(Runtime.Performance.savedParticles) do
-					if obj and obj.Parent and wasEnabled then
-						obj.Enabled = true
-					end
-				end
-				table.clear(Runtime.Performance.savedParticles)
-			end
-		end)
-		RATAHUB:Notify({ Title = "FPS Boost", Content = "Desactivado", Duration = 1.2 })
+		Lighting.GlobalShadows = true
 	end
 end
 
 function Features.SetAntiFling(enabled)
 	if enabled then
-		if Runtime.Performance.antiFlingConn then return end
-		Runtime.Performance.antiFlingConn = RunService.Stepped:Connect(function()
-			local root = getRoot()
-			if root then
-				if root.AssemblyAngularVelocity.Magnitude > 50 then
-					root.AssemblyAngularVelocity = Vector3.zero
+		if not Runtime.AntiFling.conn then
+			Runtime.AntiFling.conn = RunService.Stepped:Connect(function()
+				for _, p in ipairs(Players:GetPlayers()) do
+					if p ~= player and p.Character then
+						for _, part in ipairs(p.Character:GetDescendants()) do
+							if part:IsA("BasePart") and part.CanCollide then
+								part.CanCollide = false
+							end
+						end
+					end
 				end
-				local lv = root.AssemblyLinearVelocity
-				if lv.Magnitude > 250 then
-					root.AssemblyLinearVelocity = Vector3.new(0, lv.Y, 0)
-				end
-			end
-		end)
+			end)
+		end
 		RATAHUB:Notify({ Title = "Anti-Fling", Content = "Activado", Duration = 1.2 })
 	else
-		if Runtime.Performance.antiFlingConn then
-			Runtime.Performance.antiFlingConn:Disconnect()
-			Runtime.Performance.antiFlingConn = nil
+		if Runtime.AntiFling.conn then
+			Runtime.AntiFling.conn:Disconnect()
+			Runtime.AntiFling.conn = nil
 		end
 		RATAHUB:Notify({ Title = "Anti-Fling", Content = "Desactivado", Duration = 1.2 })
 	end
@@ -3451,6 +3607,8 @@ function Features.StartHotkeys()
 			Features.ToggleNoclipActive()
 		elseif name == Config.Aimlock.Keybind then
 			Features.ToggleAimlockLock()
+		elseif name == Config.Triggerbot.Keybind and Config.Triggerbot.Keybind ~= "None" then
+			Features.ToggleTriggerbotActive()
 		end
 	end)
 end
@@ -3477,6 +3635,10 @@ local win = RATAHUB:CreateWindow({ Title = "RATAHUB", SubTitle = "V5", Version =
 
 local WHITELIST_TARGETS = getPlayerList()
 local IGNORE_TEAMS = { "Ninguno" }
+for _, t in ipairs(Teams:GetTeams()) do
+	table.insert(IGNORE_TEAMS, t.Name)
+end
+
 local SOUND_LIST = {
 	"Skeet / Gamesense",
 	"Neverlose Hit",
@@ -3512,7 +3674,7 @@ do
 	})
 	Controls.Main.FlySpeed = main:CreateSlider({
 		Name = "Fly Speed",
-		Range = { 50, 600 },
+		Range = { 10, 300 },
 		Increment = 5,
 		CurrentValue = M.Movement.FlySpeed,
 		Callback = function(Value)
@@ -3520,7 +3682,7 @@ do
 		end,
 	})
 
-	Controls.Main.WalkSpeed = main:CreateToggle({
+	Controls.Main.WalkSpeedEnabled = main:CreateToggle({
 		Name = "WalkSpeed",
 		CurrentValue = M.Movement.WalkSpeedEnabled,
 		Callback = function(Value)
@@ -3534,9 +3696,9 @@ do
 			M.Movement.WalkSpeedKeybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
 		end,
 	})
-	Controls.Main.WalkSpeedValue = main:CreateSlider({
-		Name = "WalkSpeed",
-		Range = { 16, 300 },
+	Controls.Main.WalkSpeed = main:CreateSlider({
+		Name = "WalkSpeed Value",
+		Range = { 16, 250 },
 		Increment = 1,
 		CurrentValue = M.Movement.WalkSpeed,
 		Callback = function(Value)
@@ -3544,37 +3706,49 @@ do
 		end,
 	})
 
-	Controls.Main.JumpPower = main:CreateToggle({
+	Controls.Main.JumpPowerEnabled = main:CreateToggle({
 		Name = "JumpPower",
 		CurrentValue = M.Movement.JumpPowerEnabled,
 		Callback = function(Value)
-			M.Movement.JumpPowerEnabled = Value
-			if Value then Features.StartJumpPower() else Features.StopJumpPower() end
+			Features.SetJumpPowerMaster(Value)
 		end,
 	})
-	Controls.Main.JumpPowerValue = main:CreateSlider({
-		Name = "JumpPower",
+	Controls.Main.JumpPowerKeybind = main:CreateKeybind({
+		Name = "JumpPower Keybind",
+		CurrentKeybind = M.Movement.JumpPowerKeybind,
+		Callback = function(Key)
+			M.Movement.JumpPowerKeybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
+		end,
+	})
+	Controls.Main.JumpPower = main:CreateSlider({
+		Name = "JumpPower Value",
 		Range = { 50, 300 },
-		Increment = 1,
+		Increment = 5,
 		CurrentValue = M.Movement.JumpPower,
 		Callback = function(Value)
 			M.Movement.JumpPower = Value
 		end,
 	})
 
-	Controls.Main.Gravity = main:CreateToggle({
+	Controls.Main.GravityEnabled = main:CreateToggle({
 		Name = "Gravity",
 		CurrentValue = M.Movement.GravityEnabled,
 		Callback = function(Value)
-			M.Movement.GravityEnabled = Value
-			if Value then Features.StartGravity() else Features.StopGravity() end
+			Features.SetGravityMaster(Value)
 		end,
 	})
-	Controls.Main.GravityValue = main:CreateSlider({
-		Name = "Gravity",
-		Range = { 0, 196.2 },
-		Increment = 0.1,
-		CurrentValue = M.Movement.Gravity,
+	Controls.Main.GravityKeybind = main:CreateKeybind({
+		Name = "Gravity Keybind",
+		CurrentKeybind = M.Movement.GravityKeybind,
+		Callback = function(Key)
+			M.Movement.GravityKeybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
+		end,
+	})
+	Controls.Main.Gravity = main:CreateSlider({
+		Name = "Gravity Value",
+		Range = { 0, 196 },
+		Increment = 2,
+		CurrentValue = math.floor(M.Movement.Gravity),
 		Callback = function(Value)
 			M.Movement.Gravity = Value
 		end,
@@ -3596,14 +3770,14 @@ do
 	})
 
 	Controls.Main.Noclip = main:CreateToggle({
-		Name = "No Clip",
+		Name = "Noclip",
 		CurrentValue = M.Movement.Noclip,
 		Callback = function(Value)
 			Features.SetNoclipMaster(Value)
 		end,
 	})
 	Controls.Main.NoclipKeybind = main:CreateKeybind({
-		Name = "No Clip Keybind",
+		Name = "Noclip Keybind",
 		CurrentKeybind = M.Movement.NoclipKeybind,
 		Callback = function(Key)
 			M.Movement.NoclipKeybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
@@ -3611,8 +3785,9 @@ do
 	})
 
 	main:CreateSection("Player")
-	Controls.Main.Reset = main:CreateButton({
-		Name = "Reset Personaje (Desbuguear / Respawn)",
+	main:CreateButton({
+		Name = "Reset Character",
+		Destructive = true,
 		Callback = function()
 			Features.ResetCharacter()
 		end,
@@ -3670,74 +3845,25 @@ do
 			M.Utility.TargetServerPlayers = Value
 		end,
 	})
-	Controls.Main.JoinServer = main:CreateButton({
-		Name = "Unirse a Servidor con esa Cantidad",
-		Callback = function()
-			Features.ServerHop()
-		end,
-	})
 	Controls.Main.AntiAFK = main:CreateToggle({
 		Name = "Anti-AFK",
 		CurrentValue = M.Utility.AntiAFK,
 		Callback = function(Value)
-			M.Utility.AntiAFK = Value
 			Features.SetAntiAFK(Value)
 		end,
 	})
-	Controls.Main.Rejoin = main:CreateButton({
-		Name = "Rejoin Same Server (Mismo Servidor)",
-		Callback = function()
-			Features.Rejoin()
-		end,
-	})
 end
-
---------------------------------------------------------------
--- DYNAMIC PLAYER & TEAM LIST HOOKS
---------------------------------------------------------------
-local function refreshAllPlayerDropdowns()
-	local list = getPlayerList()
-	if Controls.Main.HitboxTarget then Controls.Main.HitboxTarget:Refresh(list, false) end
-	if Controls.ESP.WhitelistTarget then Controls.ESP.WhitelistTarget:Refresh(list, false) end
-	if Controls.Aimlock.WhitelistTarget then Controls.Aimlock.WhitelistTarget:Refresh(list, false) end
-end
-
-Players.PlayerAdded:Connect(function()
-	refreshAllPlayerDropdowns()
-end)
-
-Players.PlayerRemoving:Connect(function(leavingPlayer)
-	Runtime.FriendsCache[leavingPlayer.UserId] = nil
-
-	if Config.Main.Player.HitboxTarget == leavingPlayer.Name then Config.Main.Player.HitboxTarget = "Nadie" end
-	if Config.ESP.WhitelistTarget == leavingPlayer.Name then Config.ESP.WhitelistTarget = "Nadie" end
-	if Config.Aimlock.WhitelistTarget == leavingPlayer.Name then Config.Aimlock.WhitelistTarget = "Nadie" end
-
-	if Runtime.Aimlock.currentTarget == leavingPlayer then
-		Features.UnlockAimlock("left", leavingPlayer.Name)
-	end
-
-	if Runtime.ESP.objects[leavingPlayer] then
-		local o = Runtime.ESP.objects[leavingPlayer]
-		if o.Highlight then o.Highlight:Destroy() end
-		if o.Billboard then o.Billboard:Destroy() end
-		if o.Tracer then o.Tracer:Destroy() end
-		Runtime.ESP.objects[leavingPlayer] = nil
-	end
-
-	refreshAllPlayerDropdowns()
-end)
 
 --------------------------------------------------------------
 -- 2. ESP TAB
 --------------------------------------------------------------
 do
-	local esp = win:CreateTab({ Name = "ESP", Icon = "◉", SubTitle = "Highlights, names and tracers" })
+	local esp = win:CreateTab({ Name = "ESP", Icon = "👁", SubTitle = "Visual extra-sensory perception" })
 	local E = Config.ESP
 
 	esp:CreateSection("General")
 	Controls.ESP.Highlight = esp:CreateToggle({
-		Name = "ESP Highlight",
+		Name = "Highlight",
 		CurrentValue = E.Highlight,
 		Callback = function(Value)
 			E.Highlight = Value
@@ -3745,7 +3871,7 @@ do
 		end,
 	})
 	Controls.ESP.Names = esp:CreateToggle({
-		Name = "ESP Nombres",
+		Name = "Names",
 		CurrentValue = E.Names,
 		Callback = function(Value)
 			E.Names = Value
@@ -3753,7 +3879,7 @@ do
 		end,
 	})
 	Controls.ESP.Details = esp:CreateToggle({
-		Name = "ESP Nombre + Studs + Vida",
+		Name = "Details (HP & Distancia)",
 		CurrentValue = E.Details,
 		Callback = function(Value)
 			E.Details = Value
@@ -3761,76 +3887,72 @@ do
 		end,
 	})
 	Controls.ESP.OffsetX = esp:CreateSlider({
-		Name = "Posicion Offset X (Lados)",
+		Name = "Offset X",
 		Range = { -10, 10 },
-		Increment = 0.1,
+		Increment = 0.5,
 		CurrentValue = E.OffsetX,
 		Callback = function(Value)
 			E.OffsetX = Value
+			Features.UpdateESP()
 		end,
 	})
 	Controls.ESP.OffsetY = esp:CreateSlider({
-		Name = "Posicion Offset Y (Altura)",
+		Name = "Offset Y",
 		Range = { -10, 10 },
-		Increment = 0.1,
+		Increment = 0.5,
 		CurrentValue = E.OffsetY,
 		Callback = function(Value)
 			E.OffsetY = Value
+			Features.UpdateESP()
 		end,
 	})
 	Controls.ESP.TextSize = esp:CreateSlider({
-		Name = "Tamaño de Texto ESP",
-		Range = { 8, 32 },
+		Name = "Text Size",
+		Range = { 8, 24 },
 		Increment = 1,
 		CurrentValue = E.TextSize,
 		Callback = function(Value)
 			E.TextSize = Value
+			Features.UpdateESP()
 		end,
 	})
+
+	esp:CreateSection("Tracers")
 	Controls.ESP.Tracers = esp:CreateToggle({
-		Name = "Tracer Whitelist (Rojo)",
+		Name = "Tracers",
 		CurrentValue = E.Tracers,
 		Callback = function(Value)
 			E.Tracers = Value
-			if Value and Config.Aimlock.EnemyTracers then
-				Config.Aimlock.EnemyTracers = false
-				if Controls.Aimlock.EnemyTracers then Controls.Aimlock.EnemyTracers:Set(false) end
-			end
 			Features.UpdateESP()
 		end,
 	})
 	Controls.ESP.TracerOrigin = esp:CreateDropdown({
-		Name = "Tracer Origin",
-		Options = { "Mouse", "Bottom", "Center" },
+		Name = "Origen de Tracers",
+		Options = { "Bottom", "Center", "Mouse" },
 		CurrentOption = E.TracerOrigin,
 		Callback = function(Value)
 			E.TracerOrigin = Value
+			Features.UpdateESP()
 		end,
 	})
 	Controls.ESP.TeamColorTracers = esp:CreateToggle({
-		Name = "Team Color Tracer",
+		Name = "Team Color Tracers",
 		CurrentValue = E.TeamColorTracers,
 		Callback = function(Value)
 			E.TeamColorTracers = Value
+			Features.UpdateESP()
 		end,
 	})
 
 	esp:CreateSection("Whitelist")
-	local isSyncing = false
 	Controls.ESP.WhitelistMode = esp:CreateDropdown({
 		Name = "ESP Whitelist Mode",
 		Options = { "Disabled", "Ignore Whitelist", "Only Whitelist" },
 		CurrentOption = E.WhitelistMode,
 		Callback = function(Value)
 			E.WhitelistMode = Value
-			if not isSyncing then
-				isSyncing = true
-				if E.SyncAimlock and Controls.Aimlock.WhitelistMode then
-					Config.Aimlock.WhitelistMode = Value
-					Controls.Aimlock.WhitelistMode:SetSilent(Value)
-				end
-				isSyncing = false
-			end
+			Features.SyncManager.SyncProperty("ESP", "WhitelistMode", Value)
+			Features.UpdateESP()
 		end,
 	})
 	Controls.ESP.WhitelistTarget = esp:CreateDropdown({
@@ -3839,14 +3961,8 @@ do
 		CurrentOption = E.WhitelistTarget,
 		Callback = function(Value)
 			E.WhitelistTarget = Value
-			if not isSyncing then
-				isSyncing = true
-				if E.SyncAimlock and Controls.Aimlock.WhitelistTarget then
-					Config.Aimlock.WhitelistTarget = Value
-					Controls.Aimlock.WhitelistTarget:SetSilent(Value)
-				end
-				isSyncing = false
-			end
+			Features.SyncManager.SyncProperty("ESP", "WhitelistTarget", Value)
+			Features.UpdateESP()
 		end,
 	})
 	Controls.ESP.SyncAimlock = esp:CreateToggle({
@@ -3854,14 +3970,7 @@ do
 		CurrentValue = E.SyncAimlock,
 		Callback = function(Value)
 			E.SyncAimlock = Value
-			if Value and not isSyncing then
-				isSyncing = true
-				Config.Aimlock.WhitelistMode = E.WhitelistMode
-				Config.Aimlock.WhitelistTarget = E.WhitelistTarget
-				if Controls.Aimlock.WhitelistMode then Controls.Aimlock.WhitelistMode:SetSilent(E.WhitelistMode) end
-				if Controls.Aimlock.WhitelistTarget then Controls.Aimlock.WhitelistTarget:SetSilent(E.WhitelistTarget) end
-				isSyncing = false
-			end
+			Features.SyncManager.OnSyncToggled("ESP", "Aimlock", Value)
 		end,
 	})
 	Controls.ESP.SyncTriggerbot = esp:CreateToggle({
@@ -3869,6 +3978,7 @@ do
 		CurrentValue = E.SyncTriggerbot,
 		Callback = function(Value)
 			E.SyncTriggerbot = Value
+			Features.SyncManager.OnSyncToggled("ESP", "Triggerbot", Value)
 		end,
 	})
 
@@ -3879,6 +3989,7 @@ do
 		CurrentOption = E.HighlightColor,
 		Callback = function(Value)
 			E.HighlightColor = Value
+			Features.UpdateESP()
 		end,
 	})
 	Controls.ESP.TeamColorHighlight = esp:CreateToggle({
@@ -3886,6 +3997,7 @@ do
 		CurrentValue = E.TeamColorHighlight,
 		Callback = function(Value)
 			E.TeamColorHighlight = Value
+			Features.UpdateESP()
 		end,
 	})
 	Controls.ESP.RainbowESP = esp:CreateToggle({
@@ -3893,23 +4005,27 @@ do
 		CurrentValue = E.RainbowESP,
 		Callback = function(Value)
 			E.RainbowESP = Value
+			Features.UpdateESP()
 		end,
 	})
 
 	esp:CreateSection("Team Check")
-	Controls.ESP.FriendCheck = esp:CreateToggle({
-		Name = "Friend Check (Verde)",
-		CurrentValue = E.FriendCheck,
-		Callback = function(Value)
-			E.FriendCheck = Value
-		end,
-	})
 	Controls.ESP.IgnoreTeams = esp:CreateDropdown({
 		Name = "Equipos a Ignorar",
 		Options = IGNORE_TEAMS,
 		CurrentOption = E.IgnoreTeams,
 		Callback = function(Value)
 			E.IgnoreTeams = Value
+			Features.SyncManager.SyncProperty("ESP", "IgnoreTeams", Value)
+			Features.UpdateESP()
+		end,
+	})
+	Controls.ESP.FriendCheck = esp:CreateToggle({
+		Name = "Friend Check (Ignorar Amigos)",
+		CurrentValue = E.FriendCheck,
+		Callback = function(Value)
+			E.FriendCheck = Value
+			Features.UpdateESP()
 		end,
 	})
 end
@@ -3918,7 +4034,7 @@ end
 -- 3. AIMLOCK TAB
 --------------------------------------------------------------
 do
-	local aim = win:CreateTab({ Name = "Aimlock", Icon = "⊹", SubTitle = "Target, FOV and whitelist" })
+	local aim = win:CreateTab({ Name = "Aimlock", Icon = "🎯", SubTitle = "Targeting and aim assistance" })
 	local A = Config.Aimlock
 
 	aim:CreateSection("General")
@@ -3939,7 +4055,7 @@ do
 	})
 	Controls.Aimlock.Smoothness = aim:CreateSlider({
 		Name = "Smoothness",
-		Range = { 0, 100 },
+		Range = { 0, 95 },
 		Increment = 1,
 		CurrentValue = A.Smoothness,
 		Callback = function(Value)
@@ -3947,7 +4063,7 @@ do
 		end,
 	})
 	Controls.Aimlock.Prediction = aim:CreateToggle({
-		Name = "Prediction Aimlock",
+		Name = "Prediction",
 		CurrentValue = A.Prediction,
 		Callback = function(Value)
 			A.Prediction = Value
@@ -3955,35 +4071,28 @@ do
 	})
 	Controls.Aimlock.PredictionTime = aim:CreateSlider({
 		Name = "Prediction Time",
-		Range = { 0, 1 },
+		Range = { 0.05, 0.5 },
 		Increment = 0.01,
 		CurrentValue = A.PredictionTime,
 		Callback = function(Value)
 			A.PredictionTime = Value
 		end,
 	})
+
+	aim:CreateSection("Targeting")
 	Controls.Aimlock.TeamCheck = aim:CreateToggle({
-		Name = "Team Check (No lockear equipo)",
+		Name = "Team Check",
 		CurrentValue = A.TeamCheck,
 		Callback = function(Value)
 			A.TeamCheck = Value
 		end,
 	})
-
-	aim:CreateSection("Target")
 	Controls.Aimlock.AimPart = aim:CreateDropdown({
 		Name = "Aim Part",
-		Options = { "Head", "Torso", "Auto" },
+		Options = { "Head", "HumanoidRootPart", "Torso", "Auto" },
 		CurrentOption = A.AimPart,
 		Callback = function(Value)
 			A.AimPart = Value
-		end,
-	})
-	Controls.Aimlock.FriendCheck = aim:CreateToggle({
-		Name = "Friend Check (No lockear amigos)",
-		CurrentValue = A.FriendCheck,
-		Callback = function(Value)
-			A.FriendCheck = Value
 		end,
 	})
 	Controls.Aimlock.UseMaxDistance = aim:CreateToggle({
@@ -3995,7 +4104,7 @@ do
 	})
 	Controls.Aimlock.MaxDistance = aim:CreateSlider({
 		Name = "Max Distance",
-		Range = { 50, 5000 },
+		Range = { 100, 5000 },
 		Increment = 50,
 		CurrentValue = A.MaxDistance,
 		Callback = function(Value)
@@ -4013,7 +4122,7 @@ do
 	})
 	Controls.Aimlock.FOVSize = aim:CreateSlider({
 		Name = "FOV Size",
-		Range = { 10, 500 },
+		Range = { 20, 500 },
 		Increment = 5,
 		CurrentValue = A.FOVSize,
 		Callback = function(Value)
@@ -4023,20 +4132,15 @@ do
 
 	aim:CreateSection("Visual")
 	Controls.Aimlock.EnemyTracers = aim:CreateToggle({
-		Name = "Tracer Enemigos (Aimlock)",
+		Name = "Enemy Tracers",
 		CurrentValue = A.EnemyTracers,
 		Callback = function(Value)
 			A.EnemyTracers = Value
-			if Value and Config.ESP.Tracers then
-				Config.ESP.Tracers = false
-				if Controls.ESP.Tracers then Controls.ESP.Tracers:Set(false) end
-				Features.UpdateESP()
-			end
 		end,
 	})
 	Controls.Aimlock.TracerOrigin = aim:CreateDropdown({
 		Name = "Tracer Origin",
-		Options = { "Mouse", "Bottom" },
+		Options = { "Mouse", "Center", "Bottom" },
 		CurrentOption = A.TracerOrigin,
 		Callback = function(Value)
 			A.TracerOrigin = Value
@@ -4050,14 +4154,7 @@ do
 		CurrentOption = A.WhitelistMode,
 		Callback = function(Value)
 			A.WhitelistMode = Value
-			if not isSyncing then
-				isSyncing = true
-				if A.SyncESP and Controls.ESP.WhitelistMode then
-					Config.ESP.WhitelistMode = Value
-					Controls.ESP.WhitelistMode:SetSilent(Value)
-				end
-				isSyncing = false
-			end
+			Features.SyncManager.SyncProperty("Aimlock", "WhitelistMode", Value)
 		end,
 	})
 	Controls.Aimlock.WhitelistTarget = aim:CreateDropdown({
@@ -4066,14 +4163,7 @@ do
 		CurrentOption = A.WhitelistTarget,
 		Callback = function(Value)
 			A.WhitelistTarget = Value
-			if not isSyncing then
-				isSyncing = true
-				if A.SyncESP and Controls.ESP.WhitelistTarget then
-					Config.ESP.WhitelistTarget = Value
-					Controls.ESP.WhitelistTarget:SetSilent(Value)
-				end
-				isSyncing = false
-			end
+			Features.SyncManager.SyncProperty("Aimlock", "WhitelistTarget", Value)
 		end,
 	})
 	Controls.Aimlock.SyncESP = aim:CreateToggle({
@@ -4081,14 +4171,7 @@ do
 		CurrentValue = A.SyncESP,
 		Callback = function(Value)
 			A.SyncESP = Value
-			if Value and not isSyncing then
-				isSyncing = true
-				Config.ESP.WhitelistMode = A.WhitelistMode
-				Config.ESP.WhitelistTarget = A.WhitelistTarget
-				if Controls.ESP.WhitelistMode then Controls.ESP.WhitelistMode:SetSilent(A.WhitelistMode) end
-				if Controls.ESP.WhitelistTarget then Controls.ESP.WhitelistTarget:SetSilent(A.WhitelistTarget) end
-				isSyncing = false
-			end
+			Features.SyncManager.OnSyncToggled("Aimlock", "ESP", Value)
 		end,
 	})
 	Controls.Aimlock.SyncTriggerbot = aim:CreateToggle({
@@ -4096,6 +4179,7 @@ do
 		CurrentValue = A.SyncTriggerbot,
 		Callback = function(Value)
 			A.SyncTriggerbot = Value
+			Features.SyncManager.OnSyncToggled("Aimlock", "Triggerbot", Value)
 		end,
 	})
 
@@ -4106,6 +4190,14 @@ do
 		CurrentOption = A.IgnoreTeams,
 		Callback = function(Value)
 			A.IgnoreTeams = Value
+			Features.SyncManager.SyncProperty("Aimlock", "IgnoreTeams", Value)
+		end,
+	})
+	Controls.Aimlock.FriendCheck = aim:CreateToggle({
+		Name = "Friend Check (Ignorar Amigos)",
+		CurrentValue = A.FriendCheck,
+		Callback = function(Value)
+			A.FriendCheck = Value
 		end,
 	})
 end
@@ -4115,25 +4207,118 @@ end
 --------------------------------------------------------------
 do
 	local trig = win:CreateTab({ Name = "Triggerbot", Icon = "◎", SubTitle = "Auto-fire checks and whitelist" })
+	local T = Config.Triggerbot
 
 	trig:CreateSection("General")
-	trig:CreateToggle({ Name = "Triggerbot", CurrentValue = false, Callback = function(_) end })
-	trig:CreateSlider({ Name = "Trigger Delay", Range = { 0, 500 }, Increment = 5, CurrentValue = 50, Suffix = " ms", Callback = function(_) end })
+	Controls.Triggerbot.Enabled = trig:CreateToggle({
+		Name = "Triggerbot",
+		CurrentValue = T.Enabled,
+		Callback = function(Value)
+			Features.SetTriggerbotMaster(Value)
+		end,
+	})
+	Controls.Triggerbot.Keybind = trig:CreateKeybind({
+		Name = "Triggerbot Keybind",
+		CurrentKeybind = T.Keybind,
+		Callback = function(Key)
+			T.Keybind = (typeof(Key) == "EnumItem") and Key.Name or tostring(Key)
+		end,
+	})
+	Controls.Triggerbot.Delay = trig:CreateSlider({
+		Name = "Trigger Delay",
+		Range = { 0, 500 },
+		Increment = 5,
+		CurrentValue = T.Delay,
+		Suffix = " ms",
+		Callback = function(Value)
+			T.Delay = Value
+		end,
+	})
 
 	trig:CreateSection("Checks")
-	trig:CreateToggle({ Name = "Team Check (No disparar equipo)", CurrentValue = true, Callback = function(_) end })
-	trig:CreateToggle({ Name = "Wall Check", CurrentValue = true, Callback = function(_) end })
+	Controls.Triggerbot.TeamCheck = trig:CreateToggle({
+		Name = "Team Check (No disparar equipo)",
+		CurrentValue = T.TeamCheck,
+		Callback = function(Value)
+			T.TeamCheck = Value
+		end,
+	})
+	Controls.Triggerbot.WallCheck = trig:CreateToggle({
+		Name = "Wall Check",
+		CurrentValue = T.WallCheck,
+		Callback = function(Value)
+			T.WallCheck = Value
+		end,
+	})
 
 	trig:CreateSection("Whitelist")
-	trig:CreateToggle({ Name = "Triggerbot Whitelist Mode", CurrentValue = false, Callback = function(_) end })
-	trig:CreateDropdown({ Name = "Seleccionar Objetivo Whitelist", Options = WHITELIST_TARGETS, CurrentOption = "Nadie", Callback = function(_) end })
-	trig:CreateToggle({ Name = "Sincronizar con ESP", CurrentValue = false, Callback = function(_) end })
-	trig:CreateToggle({ Name = "Sincronizar con Aimlock", CurrentValue = false, Callback = function(_) end })
+	Controls.Triggerbot.WhitelistMode = trig:CreateDropdown({
+		Name = "Triggerbot Whitelist Mode",
+		Options = { "Disabled", "Ignore Whitelist", "Only Whitelist" },
+		CurrentOption = T.WhitelistMode,
+		Callback = function(Value)
+			T.WhitelistMode = Value
+			Features.SyncManager.SyncProperty("Triggerbot", "WhitelistMode", Value)
+		end,
+	})
+	Controls.Triggerbot.WhitelistTarget = trig:CreateDropdown({
+		Name = "Seleccionar Objetivo Whitelist",
+		Options = WHITELIST_TARGETS,
+		CurrentOption = T.WhitelistTarget,
+		Callback = function(Value)
+			T.WhitelistTarget = Value
+			Features.SyncManager.SyncProperty("Triggerbot", "WhitelistTarget", Value)
+		end,
+	})
+	Controls.Triggerbot.SyncESP = trig:CreateToggle({
+		Name = "Sincronizar con ESP",
+		CurrentValue = T.SyncESP,
+		Callback = function(Value)
+			T.SyncESP = Value
+			Features.SyncManager.OnSyncToggled("Triggerbot", "ESP", Value)
+		end,
+	})
+	Controls.Triggerbot.SyncAimlock = trig:CreateToggle({
+		Name = "Sincronizar con Aimlock",
+		CurrentValue = T.SyncAimlock,
+		Callback = function(Value)
+			T.SyncAimlock = Value
+			Features.SyncManager.OnSyncToggled("Triggerbot", "Aimlock", Value)
+		end,
+	})
 
 	trig:CreateSection("Team Check")
-	trig:CreateDropdown({ Name = "Equipos a Ignorar", Options = IGNORE_TEAMS, CurrentOption = "Ninguno", Callback = function(_) end })
-	trig:CreateToggle({ Name = "Sincronizar con ESP", CurrentValue = false, Callback = function(_) end })
-	trig:CreateToggle({ Name = "Sincronizar con Aimlock", CurrentValue = false, Callback = function(_) end })
+	Controls.Triggerbot.IgnoreTeams = trig:CreateDropdown({
+		Name = "Equipos a Ignorar",
+		Options = IGNORE_TEAMS,
+		CurrentOption = T.IgnoreTeams,
+		Callback = function(Value)
+			T.IgnoreTeams = Value
+			Features.SyncManager.SyncProperty("Triggerbot", "IgnoreTeams", Value)
+		end,
+	})
+	Controls.Triggerbot.SyncTeamESP = trig:CreateToggle({
+		Name = "Sincronizar con ESP (Equipos)",
+		CurrentValue = T.SyncTeamESP,
+		Callback = function(Value)
+			T.SyncTeamESP = Value
+			if Value then
+				Config.ESP.IgnoreTeams = T.IgnoreTeams
+				if Controls.ESP.IgnoreTeams then Controls.ESP.IgnoreTeams:SetSilent(T.IgnoreTeams) end
+			end
+		end,
+	})
+	Controls.Triggerbot.SyncTeamAimlock = trig:CreateToggle({
+		Name = "Sincronizar con Aimlock (Equipos)",
+		CurrentValue = T.SyncTeamAimlock,
+		Callback = function(Value)
+			T.SyncTeamAimlock = Value
+			if Value then
+				Config.Aimlock.IgnoreTeams = T.IgnoreTeams
+				if Controls.Aimlock.IgnoreTeams then Controls.Aimlock.IgnoreTeams:SetSilent(T.IgnoreTeams) end
+			end
+		end,
+	})
 end
 
 --------------------------------------------------------------
@@ -4226,7 +4411,6 @@ do
 		Name = "Anti-Fling",
 		CurrentValue = E.Performance.AntiFling,
 		Callback = function(Value)
-			E.Performance.AntiFling = Value
 			Features.SetAntiFling(Value)
 		end,
 	})
@@ -4239,8 +4423,36 @@ do
 	local troll = win:CreateTab({ Name = "Troll", Icon = "☻", SubTitle = "Troll scripts" })
 
 	troll:CreateSection("Scripts")
-	troll:CreateToggle({ Name = "Fling", CurrentValue = false, Callback = function(_) end })
-	troll:CreateToggle({ Name = "Invisible", CurrentValue = false, Callback = function(_) end })
+	Controls.Troll.Fling = troll:CreateButton({
+		Name = "Fling",
+		Callback = function()
+			task.spawn(function()
+				local success, err = pcall(function()
+					loadstring(game:HttpGet("https://raw.githubusercontent.com/0Ben1/fe/main/obf_rf6iQURzu1fqrytcnLBAvW34C9N55kS9g9G3CKz086rC47M6632sEd4ZZYB0AYgV.lua.txt"))()
+				end)
+				if not success then
+					RATAHUB:Notify({ Title = "Troll", Content = "Error al cargar Fling", Duration = 2 })
+				else
+					RATAHUB:Notify({ Title = "Troll", Content = "Fling ejecutado", Duration = 1.5 })
+				end
+			end)
+		end,
+	})
+	Controls.Troll.Invisible = troll:CreateButton({
+		Name = "Invisible",
+		Callback = function()
+			task.spawn(function()
+				local success, err = pcall(function()
+					loadstring(game:HttpGet("https://pastebin.com/raw/3Rnd9rHf"))()
+				end)
+				if not success then
+					RATAHUB:Notify({ Title = "Troll", Content = "Error al cargar Invisible", Duration = 2 })
+				else
+					RATAHUB:Notify({ Title = "Troll", Content = "Invisible ejecutado", Duration = 1.5 })
+				end
+			end)
+		end,
+	})
 end
 
 --------------------------------------------------------------
@@ -4248,17 +4460,61 @@ end
 --------------------------------------------------------------
 do
 	local sounds = win:CreateTab({ Name = "Sounds", Icon = "♪", SubTitle = "Lock and hit sound configuration" })
+	local S = Config.Sounds
 
 	sounds:CreateSection("Configuracion de Sonidos")
-	sounds:CreateToggle({ Name = "Lock Sound (Sonido al fijar)", CurrentValue = false, Callback = function(_) end })
-	sounds:CreateDropdown({ Name = "Sonido para Lock Target", Options = SOUND_LIST, CurrentOption = "Skeet / Gamesense", Callback = function(_) end })
-	sounds:CreateToggle({ Name = "Hit Sound (Sonido al golpear/disparar)", CurrentValue = false, Callback = function(_) end })
-	sounds:CreateDropdown({ Name = "Sonido para Hit / Disparo", Options = SOUND_LIST, CurrentOption = "Neverlose Hit", Callback = function(_) end })
+	Controls.Sounds.LockSound = sounds:CreateToggle({
+		Name = "Lock Sound (Sonido al fijar)",
+		CurrentValue = S.LockSound,
+		Callback = function(Value)
+			S.LockSound = Value
+		end,
+	})
+	Controls.Sounds.LockTargetSound = sounds:CreateDropdown({
+		Name = "Sonido para Lock Target",
+		Options = SOUND_LIST,
+		CurrentOption = S.LockTargetSound,
+		Callback = function(Value)
+			S.LockTargetSound = Value
+		end,
+	})
+	Controls.Sounds.HitSound = sounds:CreateToggle({
+		Name = "Hit Sound (Sonido al golpear/disparar)",
+		CurrentValue = S.HitSound,
+		Callback = function(Value)
+			S.HitSound = Value
+		end,
+	})
+	Controls.Sounds.HitShootSound = sounds:CreateDropdown({
+		Name = "Sonido para Hit / Disparo",
+		Options = SOUND_LIST,
+		CurrentOption = S.HitShootSound,
+		Callback = function(Value)
+			S.HitShootSound = Value
+		end,
+	})
 
 	sounds:CreateSection("Probar & Escuchar Sonidos")
-	sounds:CreateDropdown({ Name = "Lista de Sonidos", Options = SOUND_LIST, CurrentOption = "Skeet / Gamesense", Callback = function(_) end })
-	sounds:CreateButton({ Name = "Reproducir Sonido Seleccionado", Callback = function() end })
-	sounds:CreateButton({
+	Controls.Sounds.PreviewSound = sounds:CreateDropdown({
+		Name = "Lista de Sonidos",
+		Options = SOUND_LIST,
+		CurrentOption = S.PreviewSound,
+		Callback = function(Value)
+			S.PreviewSound = Value
+		end,
+	})
+	Controls.Sounds.PlayPreview = sounds:CreateButton({
+		Name = "🔊 Reproducir Sonido Seleccionado",
+		Callback = function()
+			Features.PlaySound(S.PreviewSound)
+			RATAHUB:Notify({
+				Title = "Audio Test",
+				Content = "Reproduciendo: " .. tostring(S.PreviewSound),
+				Duration = 1.5
+			})
+		end,
+	})
+	Controls.Sounds.DestroyHub = sounds:CreateButton({
 		Name = "🚨 Destroy Hub (Apagar Todo)",
 		Destructive = true,
 		Callback = function()
@@ -4266,6 +4522,43 @@ do
 		end,
 	})
 end
+
+--=====================================================================
+-- PLAYER & TEAM DYNAMIC CONNECTIONS
+--=====================================================================
+Players.PlayerAdded:Connect(function(newPlayer)
+	task.wait(0.5)
+	local updatedPlayers = getPlayerList()
+	WHITELIST_TARGETS = updatedPlayers
+	if Controls.Main and Controls.Main.HitboxTarget then Controls.Main.HitboxTarget:Refresh(updatedPlayers) end
+	if Controls.ESP and Controls.ESP.WhitelistTarget then Controls.ESP.WhitelistTarget:Refresh(updatedPlayers) end
+	if Controls.Aimlock and Controls.Aimlock.WhitelistTarget then Controls.Aimlock.WhitelistTarget:Refresh(updatedPlayers) end
+	if Controls.Triggerbot and Controls.Triggerbot.WhitelistTarget then Controls.Triggerbot.WhitelistTarget:Refresh(updatedPlayers) end
+end)
+
+Players.PlayerRemoving:Connect(function(leftPlayer)
+	task.wait(0.2)
+	local updatedPlayers = getPlayerList()
+	WHITELIST_TARGETS = updatedPlayers
+	if Controls.Main and Controls.Main.HitboxTarget then Controls.Main.HitboxTarget:Refresh(updatedPlayers) end
+	if Controls.ESP and Controls.ESP.WhitelistTarget then Controls.ESP.WhitelistTarget:Refresh(updatedPlayers) end
+	if Controls.Aimlock and Controls.Aimlock.WhitelistTarget then Controls.Aimlock.WhitelistTarget:Refresh(updatedPlayers) end
+	if Controls.Triggerbot and Controls.Triggerbot.WhitelistTarget then Controls.Triggerbot.WhitelistTarget:Refresh(updatedPlayers) end
+
+	if Runtime.Aimlock.currentTarget == leftPlayer then
+		Features.UnlockAimlock("left", leftPlayer.Name)
+	end
+	if Runtime.ESP.objects[leftPlayer] then
+		local entry = Runtime.ESP.objects[leftPlayer]
+		if entry.Highlight then entry.Highlight:Destroy() end
+		if entry.Billboard then entry.Billboard:Destroy() end
+		if entry.Tracer then entry.Tracer:Remove() end
+		Runtime.ESP.objects[leftPlayer] = nil
+	end
+	if Runtime.Hitbox.origs[leftPlayer] then
+		Runtime.Hitbox.origs[leftPlayer] = nil
+	end
+end)
 
 -- Initialize event hotkeys listener
 Features.StartHotkeys()
