@@ -68,6 +68,7 @@ local MIN_W, MIN_H = 640, 420
 local MAX_W, MAX_H = 1200, 760
 local START_W, START_H = 880, 572
 local TOPBAR_H = 52
+local FOOTER_H = 34          -- dedicated full-width footer strip at the bottom
 local SIDEBAR_W = 200
 local NAV_ITEM_H = 44
 
@@ -619,19 +620,17 @@ function RATAHUB:CreateWindow(cfg)
 	--------------------------------------------------------------
 	-- BODY
 	--------------------------------------------------------------
+	-- Body sits between the top bar and the dedicated footer strip, so its
+	-- height reserves BOTH so the scrolling content can never overlap the
+	-- footer. Only its Size depends on the window size, so it resizes cleanly.
 	body = create("Frame", {
 		Name = "Body",
 		Position = UDim2.fromOffset(0, TOPBAR_H),
-		Size = UDim2.new(1, 0, 1, -TOPBAR_H),
+		Size = UDim2.new(1, 0, 1, -(TOPBAR_H + FOOTER_H)),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		Parent = window,
 	})
-
-	minimizeBtn.MouseButton1Click:Connect(function()
-		minimized = not minimized
-		body.Visible = not minimized
-	end)
 
 	-- ---------- SIDEBAR ----------
 	local sidebar = create("Frame", {
@@ -652,21 +651,24 @@ function RATAHUB:CreateWindow(cfg)
 		BorderSizePixel = 0,
 		Parent = sidebar,
 	})
-	padding(sidebar, nil, 14, 14, 16, 16)
+	padding(sidebar, nil, 14, 14, 18, 14)
 
 	create("TextLabel", {
-		Size = UDim2.new(1, 0, 0, 16),
+		Size = UDim2.new(1, 0, 0, 14),
 		BackgroundTransparency = 1,
 		Text = "MENU",
 		TextColor3 = THEME.Muted,
+		TextTransparency = 0.15,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Font = FONT_BOLD, TextSize = 11,
 		Parent = sidebar,
 	})
 
+	-- Nav now fills the sidebar; the footer lives in its own full-width strip
+	-- at the bottom of the window, no longer reserved for inside the sidebar.
 	local nav = create("Frame", {
-		Position = UDim2.fromOffset(0, 26),
-		Size = UDim2.new(1, 0, 1, -100),
+		Position = UDim2.fromOffset(0, 30),
+		Size = UDim2.new(1, 0, 1, -34),
 		BackgroundTransparency = 1,
 		Parent = sidebar,
 	})
@@ -681,57 +683,6 @@ function RATAHUB:CreateWindow(cfg)
 	})
 	corner(10, highlight)
 	stroke(highlight, 0.8, THEME.Primary)
-
-	-- footer premium card
-	local footer = create("Frame", {
-		AnchorPoint = Vector2.new(0, 1),
-		Position = UDim2.new(0, 0, 1, 0),
-		Size = UDim2.new(1, 0, 0, 56),
-		BackgroundColor3 = THEME.Card,
-		BorderSizePixel = 0,
-		Parent = sidebar,
-	})
-	corner(12, footer)
-	stroke(footer, 0.9)
-	padding(footer, nil, 10, 10, 0, 0)
-	local avatar = create("Frame", {
-		AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.new(0, 0, 0.5, 0),
-		Size = UDim2.fromOffset(34, 34),
-		BackgroundColor3 = THEME.Primary,
-		BackgroundTransparency = 0.8,
-		BorderSizePixel = 0,
-		Parent = footer,
-	})
-	corner(10, avatar)
-	create("TextLabel", {
-		Size = UDim2.fromScale(1, 1),
-		BackgroundTransparency = 1,
-		Text = "RH",
-		TextColor3 = THEME.Primary,
-		Font = FONT_BOLD, TextSize = 12,
-		Parent = avatar,
-	})
-	create("TextLabel", {
-		Position = UDim2.fromOffset(44, 10),
-		Size = UDim2.new(1, -44, 0, 16),
-		BackgroundTransparency = 1,
-		Text = "Premium",
-		TextColor3 = THEME.Foreground,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		Font = FONT_BOLD, TextSize = 13,
-		Parent = footer,
-	})
-	create("TextLabel", {
-		Position = UDim2.fromOffset(44, 28),
-		Size = UDim2.new(1, -44, 0, 14),
-		BackgroundTransparency = 1,
-		Text = cfg.Version or "v2.4.1",
-		TextColor3 = THEME.Muted,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		Font = FONT_MONO, TextSize = 11,
-		Parent = footer,
-	})
 
 	-- ---------- CONTENT ----------
 	local content = create("Frame", {
@@ -797,6 +748,116 @@ function RATAHUB:CreateWindow(cfg)
 		Parent = scroll,
 	})
 
+	--------------------------------------------------------------
+	-- FOOTER (dedicated full-width strip, pinned to the window bottom)
+	-- It is a sibling of the body, not a child of it, so it keeps a fixed
+	-- height and a stable position while the body/content flexes above it.
+	-- A 1px separator on its top edge cleanly divides body from footer, and
+	-- the window's rounded bottom corners are matched here.
+	--------------------------------------------------------------
+	local footerBar = create("Frame", {
+		Name = "Footer",
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.new(1, 0, 0, FOOTER_H),
+		BackgroundColor3 = THEME.Sidebar,
+		BackgroundTransparency = 0.15,
+		BorderSizePixel = 0,
+		ZIndex = 5,
+		Parent = window,
+	})
+	corner(22, footerBar)
+	-- square off the TOP corners so only the bottom stays rounded
+	create("Frame", {
+		Size = UDim2.new(1, 0, 0, 22),
+		BackgroundColor3 = THEME.Sidebar,
+		BackgroundTransparency = 0.15,
+		BorderSizePixel = 0,
+		ZIndex = 5,
+		Parent = footerBar,
+	})
+	-- the separator that divides the body from the footer
+	create("Frame", {
+		Name = "Separator",
+		Size = UDim2.new(1, 0, 0, 1),
+		BackgroundColor3 = THEME.Stroke,
+		BackgroundTransparency = 0.85,
+		BorderSizePixel = 0,
+		ZIndex = 6,
+		Parent = footerBar,
+	})
+	padding(footerBar, nil, 16, 14, 0, 0)
+
+	-- left: brand + version
+	create("TextLabel", {
+		Name = "Brand",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.fromOffset(72, 16),
+		BackgroundTransparency = 1,
+		Text = cfg.Title or "RATAHUB",
+		TextColor3 = THEME.Foreground,
+		TextTransparency = 0.05,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT_BOLD, TextSize = 12,
+		ZIndex = 6,
+		Parent = footerBar,
+	})
+	create("TextLabel", {
+		Name = "Version",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 74, 0.5, 0),
+		Size = UDim2.fromOffset(90, 14),
+		BackgroundTransparency = 1,
+		Text = cfg.Version or "v2.4.1",
+		TextColor3 = THEME.Muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT_MONO, TextSize = 11,
+		ZIndex = 6,
+		Parent = footerBar,
+	})
+
+	-- right: status pill (dot + label), right-aligned
+	local status = create("Frame", {
+		Name = "Status",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(64, 16),
+		BackgroundTransparency = 1,
+		ZIndex = 6,
+		Parent = footerBar,
+	})
+	create("Frame", {
+		Name = "Dot",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.fromOffset(7, 7),
+		BackgroundColor3 = THEME.Primary,
+		BorderSizePixel = 0,
+		ZIndex = 6,
+		Parent = status,
+	})
+	corner(4, status:FindFirstChild("Dot"))
+	create("TextLabel", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 13, 0.5, 0),
+		Size = UDim2.new(1, -13, 1, 0),
+		BackgroundTransparency = 1,
+		Text = "Ready",
+		TextColor3 = THEME.Muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT, TextSize = 11,
+		ZIndex = 6,
+		Parent = status,
+	})
+
+	-- minimize collapses the body and footer together for a clean fold
+	minimizeBtn.MouseButton1Click:Connect(function()
+		minimized = not minimized
+		body.Visible = not minimized
+		footerBar.Visible = not minimized
+	end)
+
 	-- expose internals to tab builders
 	self._scroll = scroll
 	self._nav = nav
@@ -821,6 +882,9 @@ function Window:_select(id)
 		local active = (tid == id)
 		tween(nb.icon, HOVER, { TextColor3 = active and THEME.Primary or THEME.Muted })
 		tween(nb.label, HOVER, { TextColor3 = active and THEME.Foreground or THEME.Muted })
+		-- the active row is dressed by the sliding highlight, so clear any
+		-- lingering hover fill on it to avoid a doubled background.
+		if active then tween(nb.button, HOVER, { BackgroundTransparency = 1 }) end
 	end
 
 	local nb = self.navButtons[id]
@@ -853,11 +917,13 @@ function Window:CreateTab(cfg)
 		Name = id,
 		Position = UDim2.fromOffset(0, index * NAV_ITEM_H),
 		Size = UDim2.new(1, 0, 0, 40),
+		BackgroundColor3 = THEME.Stroke,
 		BackgroundTransparency = 1,
 		Text = "",
 		AutoButtonColor = false,
 		Parent = self._nav,
 	})
+	corner(10, btn)
 	padding(btn, nil, 12, 12, 0, 0)
 	local icon = create("TextLabel", {
 		AnchorPoint = Vector2.new(0, 0.5),
@@ -888,12 +954,14 @@ function Window:CreateTab(cfg)
 	end)
 	btn.MouseEnter:Connect(function()
 		if self._activeTab ~= id then
+			tween(btn, HOVER, { BackgroundTransparency = 0.94 })
 			tween(icon, HOVER, { TextColor3 = THEME.Foreground })
 			tween(label, HOVER, { TextColor3 = THEME.Foreground })
 		end
 	end)
 	btn.MouseLeave:Connect(function()
 		if self._activeTab ~= id then
+			tween(btn, HOVER, { BackgroundTransparency = 1 })
 			tween(icon, HOVER, { TextColor3 = THEME.Muted })
 			tween(label, HOVER, { TextColor3 = THEME.Muted })
 		end
