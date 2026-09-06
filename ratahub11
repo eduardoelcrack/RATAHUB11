@@ -181,7 +181,7 @@ local screenGui = create("ScreenGui", {
 	ResetOnSpawn = false,
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 	IgnoreGuiInset = true,
-	DisplayOrder = 100,
+	DisplayOrder = 10,
 	Parent = playerGui,
 })
 
@@ -618,10 +618,17 @@ function RATAHUB:CreateWindow(cfg)
 		Parent = sidebar,
 	})
 
-	local nav = create("Frame", {
+	local nav = create("ScrollingFrame", {
 		Position = UDim2.fromOffset(0, 30),
 		Size = UDim2.new(1, 0, 1, -34),
 		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 2,
+		ScrollBarImageColor3 = THEME.Stroke,
+		ScrollBarImageTransparency = 0.6,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ClipsDescendants = true,
 		Parent = sidebar,
 	})
 	local highlight = create("Frame", {
@@ -1469,6 +1476,7 @@ function Tab:CreateDropdown(cfg)
 			windowInstance._currentDropdownClose = setOpen
 			windowInstance._currentDropdownReposition = updatePopupGeometry
 
+			rebuildOptions()
 			updatePopupGeometry()
 			list.Visible = true
 			tween(arrow, DROP, { Rotation = 180 })
@@ -1536,10 +1544,14 @@ function Tab:CreateDropdown(cfg)
 			corner(6, item)
 			padding(item, nil, 10, 6, 0, 0)
 			item.MouseEnter:Connect(function()
-				tween(item, HOVER, { BackgroundTransparency = 0.85, TextColor3 = THEME.Foreground })
+				if not (isMulti and selectedMulti[opt] == true or not isMulti and current == opt) then
+					tween(item, HOVER, { BackgroundTransparency = 0.85, TextColor3 = THEME.Foreground })
+				end
 			end)
 			item.MouseLeave:Connect(function()
-				tween(item, HOVER, { BackgroundTransparency = isSel and 0.85 or 1, TextColor3 = isSel and THEME.Primary or THEME.Muted })
+				if not (isMulti and selectedMulti[opt] == true or not isMulti and current == opt) then
+					tween(item, HOVER, { BackgroundTransparency = 1, TextColor3 = THEME.Muted })
+				end
 			end)
 			item.MouseButton1Click:Connect(function()
 				choose(opt)
@@ -1555,14 +1567,15 @@ function Tab:CreateDropdown(cfg)
 
 	function handle:Refresh(newOptions, resetSelection)
 		options = newOptions or {}
-		rebuildOptions()
 		if not isMulti then
 			if resetSelection or not table.find(options, current) then
-				choose(options[1] or "")
+				current = options[1] or ""
+				selectedLabel.Text = tostring(current)
 			end
 		else
 			selectedLabel.Text = getDisplayText()
 		end
+		rebuildOptions()
 	end
 
 	function handle:Set(v)
@@ -1577,14 +1590,13 @@ function Tab:CreateDropdown(cfg)
 				selectedMulti[v] = true
 			end
 			selectedLabel.Text = getDisplayText()
-			rebuildOptions()
+			if open then rebuildOptions() end
+			if cfg.Callback then task.spawn(cfg.Callback, selectedMulti) end
 		else
-			for _, o in ipairs(options) do
-				if o == v then
-					choose(v)
-					return
-				end
-			end
+			current = v
+			selectedLabel.Text = tostring(v)
+			if open then rebuildOptions() end
+			if cfg.Callback then task.spawn(cfg.Callback, v) end
 		end
 	end
 	function handle:Get() return isMulti and selectedMulti or current end
@@ -2361,26 +2373,56 @@ function Features.StartWalkSpeed()
 		local hum = getHumanoid()
 		if not hum then return end
 		if not Runtime.WalkSpeed.original then Runtime.WalkSpeed.original = hum.WalkSpeed end
-		local desired = Runtime.WalkSpeed.active and Config.Main.Movement.WalkSpeed
-			or (Runtime.WalkSpeed.original or 16)
-		if hum.WalkSpeed ~= desired then hum.WalkSpeed = desired end
+		if Config.Main.Movement.WalkSpeedEnabled and Runtime.WalkSpeed.active then
+			local desired = Config.Main.Movement.WalkSpeed or 16
+			if hum.WalkSpeed ~= desired then hum.WalkSpeed = desired end
+		else
+			if Runtime.WalkSpeed.original and hum.WalkSpeed ~= Runtime.WalkSpeed.original then
+				hum.WalkSpeed = Runtime.WalkSpeed.original
+			end
+		end
 	end)
 end
 
 function Features.StopWalkSpeed()
-	if Runtime.WalkSpeed.loop then Runtime.WalkSpeed.loop:Disconnect() Runtime.WalkSpeed.loop = nil end
+	if Runtime.WalkSpeed.loop then
+		Runtime.WalkSpeed.loop:Disconnect()
+		Runtime.WalkSpeed.loop = nil
+	end
+	Runtime.WalkSpeed.active = false
 	local hum = getHumanoid()
-	if hum and Runtime.WalkSpeed.original then hum.WalkSpeed = Runtime.WalkSpeed.original end
+	if hum and Runtime.WalkSpeed.original then
+		hum.WalkSpeed = Runtime.WalkSpeed.original
+	end
+end
+
+function Features.SetWalkSpeedMaster(enabled)
+	Config.Main.Movement.WalkSpeedEnabled = enabled
+	Runtime.WalkSpeed.active = false
+	if enabled then
+		Features.StartWalkSpeed()
+		RATAHUB:Notify({
+			Title = "WalkSpeed",
+			Content = "Permitido (" .. tostring(Config.Main.Movement.WalkSpeedKeybind or "Z") .. " para activar)",
+			Duration = 1.2
+		})
+	else
+		Features.StopWalkSpeed()
+		RATAHUB:Notify({ Title = "WalkSpeed", Content = "Deshabilitado", Duration = 1.2 })
+	end
 end
 
 function Features.ToggleWalkSpeed()
 	if not Config.Main.Movement.WalkSpeedEnabled then return end
 	Runtime.WalkSpeed.active = not Runtime.WalkSpeed.active
-	RATAHUB:Notify({
-		Title = "WalkSpeed",
-		Content = Runtime.WalkSpeed.active and "Activado" or "Desactivado",
-		Duration = 1.2
-	})
+	if Runtime.WalkSpeed.active then
+		Features.StartWalkSpeed()
+		RATAHUB:Notify({ Title = "WalkSpeed", Content = "Activo (" .. tostring(Config.Main.Movement.WalkSpeed) .. ")", Duration = 1.2 })
+	else
+		local hum = getHumanoid()
+		if hum and Runtime.WalkSpeed.original then hum.WalkSpeed = Runtime.WalkSpeed.original end
+		RATAHUB:Notify({ Title = "WalkSpeed", Content = "En pausa", Duration = 1.2 })
+	end
 end
 
 ------------------------------------------------------------- Movement: JumpPower
@@ -2521,7 +2563,55 @@ function Features.ToggleNoclipActive()
 	end
 end
 
-------------------------------------------------------------- Player: Reset
+------------------------------------------------------------- Player: Reset & Hitbox
+function Features.UpdateHitboxes()
+	local isEnabled = Config.Main.Player.HitboxExpander
+	local sizeVal = Config.Main.Player.HitboxSize or 5
+	local mode = Config.Main.Player.HitboxWhitelistMode or "Disabled"
+	local targetSel = Config.Main.Player.HitboxTarget
+
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player and p.Character then
+			local root = p.Character:FindFirstChild("HumanoidRootPart")
+			if root then
+				if not Runtime.Hitbox.origs[p] then
+					Runtime.Hitbox.origs[p] = {
+						Size = root.Size,
+						Transparency = root.Transparency,
+						CanCollide = root.CanCollide,
+					}
+				end
+				local orig = Runtime.Hitbox.origs[p]
+				local valid = isEnabled and Features.IsWhitelisted(p, mode, targetSel)
+				local hum = p.Character:FindFirstChildOfClass("Humanoid")
+				if valid and hum and hum.Health > 0 then
+					root.Size = Vector3.new(sizeVal, sizeVal, sizeVal)
+					root.Transparency = 0.65
+					root.CanCollide = false
+				else
+					root.Size = orig.Size
+					root.Transparency = orig.Transparency
+					root.CanCollide = orig.CanCollide
+				end
+			end
+		end
+	end
+end
+
+function Features.RestoreHitboxes()
+	for p, orig in pairs(Runtime.Hitbox.origs) do
+		if p and p.Character then
+			local root = p.Character:FindFirstChild("HumanoidRootPart")
+			if root then
+				root.Size = orig.Size
+				root.Transparency = orig.Transparency
+				root.CanCollide = orig.CanCollide
+			end
+		end
+	end
+	table.clear(Runtime.Hitbox.origs)
+end
+
 function Features.DestroyHub()
 	Features.StopFly()
 	Features.StopWalkSpeed()
@@ -2629,15 +2719,47 @@ function Features.GetESPColor(targetPlayer)
 	return COLOR_MAP[espCfg.HighlightColor] or ESP_PURPLE
 end
 
+function Features.IsWhitelisted(targetPlayer, mode, target)
+	if not targetPlayer or targetPlayer == player then return false end
+	if mode == "Disabled" then return true end
+	local name = targetPlayer.Name
+	local isSelected = false
+	if type(target) == "table" then
+		isSelected = (target[name] == true)
+	elseif type(target) == "string" then
+		isSelected = (target == name or target == "Todos")
+	end
+	if not isSelected and GlobalWhitelistTable[name] then
+		isSelected = true
+	end
+	if mode == "Only Whitelist" then
+		return isSelected
+	elseif mode == "Ignore Whitelist" then
+		return not isSelected
+	end
+	return true
+end
+
+function Features.IsSameTeam(p)
+	if not p or p == player then return true end
+	local lpTeam = player.Team
+	local tpTeam = p.Team
+	if lpTeam and tpTeam then
+		return lpTeam == tpTeam
+	end
+	if player.TeamColor and p.TeamColor then
+		return player.TeamColor == p.TeamColor
+	end
+	return false
+end
+
 function Features.IsPlayerValidESP(targetPlayer)
 	if targetPlayer == player then return false end
 	local espCfg = Config.ESP
 
 	-- Whitelist Filtering
-	if espCfg.WhitelistMode == "Only Whitelist" then
-		if targetPlayer.Name ~= espCfg.WhitelistTarget then return false end
-	elseif espCfg.WhitelistMode == "Ignore Whitelist" then
-		if targetPlayer.Name == espCfg.WhitelistTarget then return false end
+	if not Features.IsWhitelisted(targetPlayer, espCfg.WhitelistMode, espCfg.WhitelistTarget) then
+		return false
 	end
 
 	-- Team Check Filtering
@@ -3366,14 +3488,7 @@ do
 		Name = "WalkSpeed",
 		CurrentValue = M.Movement.WalkSpeedEnabled,
 		Callback = function(Value)
-			M.Movement.WalkSpeedEnabled = Value
-			if Value then
-				Runtime.WalkSpeed.active = true
-				Features.StartWalkSpeed()
-			else
-				Runtime.WalkSpeed.active = false
-				Features.StopWalkSpeed()
-			end
+			Features.SetWalkSpeedMaster(Value)
 		end,
 	})
 	Controls.Main.WalkSpeedKeybind = main:CreateKeybind({
