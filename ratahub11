@@ -1,230 +1,2457 @@
--- ============================================================
---  RATAHUB KEY SYSTEM  |  by Bambi
--- ============================================================
+--[[
+	RATAHUB — Premium Roblox Utility GUI  (framework + polish pass)
 
-local existing = game.CoreGui:FindFirstChild("RataHubKeyUI")
-if existing then existing:Destroy() end
+	Place inside a LocalScript (StarterPlayer > StarterPlayerScripts).
 
-local UIS          = game:GetService("UserInputService")
+	This file is now a REUSABLE UI FRAMEWORK, not a hardcoded screen.
+	The visual identity (theme, spacing, dimensions, tabs) is unchanged;
+	the internals were refactored so RATAHUB (or anything else) can drive
+	the UI purely through callbacks:
+
+	    RATAHUB logic  ->  state / callbacks  ->  RATAHUB UI
+
+	Public API (per window / tab):
+	    RATAHUB:CreateWindow({ Title, SubTitle, Version })
+	    Window:CreateTab({ Name, Icon, SubTitle })
+	    Tab:CreateSection(text)
+	    Tab:CreateDivider()
+	    Tab:CreateParagraph({ Title, Content })                         -> handle
+	    Tab:CreateLabel({ Text })  (or Tab:CreateLabel("Text"))         -> handle
+	    Tab:CreateButton({ Name, Callback, Destructive })               -> handle
+	    Tab:CreateToggle({ Name, Description, CurrentValue, Callback })  -> handle
+	    Tab:CreateSlider({ Name, Range, Increment, CurrentValue, Suffix, Callback }) -> handle
+	    Tab:CreateDropdown({ Name, Options, CurrentOption, Callback })   -> handle
+	    Tab:CreateKeybind({ Name, CurrentKeybind, Callback })            -> handle
+	    Tab:CreateInput({ Name, PlaceholderText, CurrentValue, Callback })-> handle
+	    Tab:CreateColorPicker({ Name, Color, Callback })                -> handle
+	    RATAHUB:Notify({ Title, Content, Duration })
+
+	Every interactive control returns a handle with :Set(value) / :Get() so
+	external logic can update the UI without knowing how it is drawn. A
+	Rayfield-style compatibility adapter (RATAHUBAdapter) is provided at the
+	bottom so existing RATAHUB/Rayfield code can forward its callbacks into
+	this UI with minimal changes.
+
+	Fully event-driven: TweenService + UserInputService only.
+	No RenderStepped / Heartbeat / while loops / polling for UI.
+]]
+
+local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
-local Lighting     = game:GetService("Lighting")
+local UserInputService = game:GetService("UserInputService")
 
-local blur = Instance.new("BlurEffect")
-blur.Size   = 0
-blur.Parent = Lighting
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
 
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name           = "RataHubKeyUI"
-ScreenGui.ResetOnSpawn   = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-ScreenGui.Parent         = game.CoreGui
-
-local Frame = Instance.new("Frame", ScreenGui)
-Frame.Size             = UDim2.new(0, 0, 0, 0)
-Frame.Position         = UDim2.new(0.5, 0, 0.5, 0)
-Frame.AnchorPoint      = Vector2.new(0.5, 0.5)
-Frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-Frame.BorderSizePixel  = 0
-Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 12)
-
-local UIStroke     = Instance.new("UIStroke", Frame)
-UIStroke.Thickness = 2
-UIStroke.Color     = Color3.fromRGB(0, 255, 255)
-
-task.spawn(function()
-    while ScreenGui.Parent do
-        TweenService:Create(UIStroke, TweenInfo.new(1), {Color = Color3.fromRGB(255, 0, 255)}):Play()
-        task.wait(1)
-        TweenService:Create(UIStroke, TweenInfo.new(1), {Color = Color3.fromRGB(0, 255, 255)}):Play()
-        task.wait(1)
-    end
-end)
-
-local TopBar = Instance.new("Frame", Frame)
-TopBar.Size             = UDim2.new(1, 0, 0, 30)
-TopBar.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-TopBar.BorderSizePixel  = 0
-Instance.new("UICorner", TopBar).CornerRadius = UDim.new(0, 12)
-
-local Title = Instance.new("TextLabel", TopBar)
-Title.Size                   = UDim2.new(1, -40, 1, 0)
-Title.Position               = UDim2.new(0, 10, 0, 0)
-Title.Text                   = "RATA HUB"
-Title.TextColor3             = Color3.new(1, 1, 1)
-Title.BackgroundTransparency = 1
-Title.TextXAlignment         = Enum.TextXAlignment.Left
-Title.Font                   = Enum.Font.GothamBold
-Title.TextSize               = 14
-
-local gradient = Instance.new("UIGradient", Title)
-gradient.Color = ColorSequence.new{
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 255, 255)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 255))
+--=====================================================================
+-- THEME (approximated from the web design's oklch palette) — UNCHANGED
+--=====================================================================
+local THEME = {
+	Background   = Color3.fromRGB(19, 22, 29),
+	Panel        = Color3.fromRGB(30, 34, 43),
+	Sidebar      = Color3.fromRGB(25, 28, 36),
+	Card         = Color3.fromRGB(37, 42, 52),
+	Secondary    = Color3.fromRGB(45, 50, 61),
+	Primary      = Color3.fromRGB(52, 197, 222),
+	PrimaryText  = Color3.fromRGB(17, 26, 36),
+	Foreground   = Color3.fromRGB(240, 244, 248),
+	Muted        = Color3.fromRGB(150, 160, 173),
+	Destructive  = Color3.fromRGB(226, 84, 84),
+	Stroke       = Color3.fromRGB(255, 255, 255),
 }
 
-task.spawn(function()
-    while ScreenGui.Parent do
-        gradient.Rotation += 2
-        task.wait(0.03)
-    end
-end)
+local FONT      = Enum.Font.GothamMedium
+local FONT_BOLD = Enum.Font.GothamBold
+local FONT_MONO = Enum.Font.Code
 
-local Close = Instance.new("TextButton", TopBar)
-Close.Size             = UDim2.new(0, 30, 1, 0)
-Close.Position         = UDim2.new(1, -30, 0, 0)
-Close.Text             = "X"
-Close.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
-Close.TextColor3       = Color3.new(1, 1, 1)
-Close.Font             = Enum.Font.GothamBold
-Close.TextSize         = 13
-Close.BorderSizePixel  = 0
-Instance.new("UICorner", Close).CornerRadius = UDim.new(0, 6)
+local MIN_W, MIN_H = 640, 420
+local MAX_W, MAX_H = 1200, 760
+local START_W, START_H = 880, 572
+local TOPBAR_H = 52
+local SIDEBAR_W = 200
+local NAV_ITEM_H = 44
 
-Close.MouseEnter:Connect(function()
-    TweenService:Create(Close, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(255, 0, 0)}):Play()
-end)
-Close.MouseLeave:Connect(function()
-    TweenService:Create(Close, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(150, 0, 0)}):Play()
-end)
-Close.MouseButton1Click:Connect(function()
-    TweenService:Create(Frame, TweenInfo.new(0.3), {Size = UDim2.new(0, 0, 0, 0)}):Play()
-    TweenService:Create(blur,  TweenInfo.new(0.3), {Size = 0}):Play()
-    task.wait(0.3)
-    ScreenGui:Destroy()
-    blur:Destroy()
-end)
+--=====================================================================
+-- ANIMATION PRESETS (smoother, premium; ~0.18–0.22s where specified)
+--=====================================================================
+local HOVER      = TweenInfo.new(0.15, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+local PRESS      = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local TOGGLE     = TweenInfo.new(0.20, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local TOGGLE_KNOB= TweenInfo.new(0.20, Enum.EasingStyle.Back, Enum.EasingDirection.Out) -- subtle overshoot
+local PULSE_UP   = TweenInfo.new(0.09, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+local PULSE_DOWN = TweenInfo.new(0.13, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+local SLIDE      = TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local DROP       = TweenInfo.new(0.20, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
+local NOTIF_IN   = TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local NOTIF_OUT  = TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
-local TextBox = Instance.new("TextBox", Frame)
-TextBox.Size                = UDim2.new(0.8, 0, 0, 40)
-TextBox.Position            = UDim2.new(0.1, 0, 0.38, 0)
-TextBox.PlaceholderText     = "Enter Key..."
-TextBox.BackgroundColor3    = Color3.fromRGB(35, 35, 35)
-TextBox.TextColor3          = Color3.new(1, 1, 1)
-TextBox.PlaceholderColor3   = Color3.fromRGB(130, 130, 130)
-TextBox.Font                = Enum.Font.Gotham
-TextBox.TextSize            = 13
-TextBox.BorderSizePixel     = 0
-TextBox.ClearTextOnFocus    = false
-Instance.new("UICorner", TextBox).CornerRadius = UDim.new(0, 8)
+--=====================================================================
+-- SMALL HELPERS
+--=====================================================================
+local function create(className, props, children)
+	local inst = Instance.new(className)
+	for k, v in pairs(props or {}) do
+		inst[k] = v
+	end
+	for _, child in ipairs(children or {}) do
+		child.Parent = inst
+	end
+	return inst
+end
 
-local Button = Instance.new("TextButton", Frame)
-Button.Size             = UDim2.new(0.8, 0, 0, 40)
-Button.Position         = UDim2.new(0.1, 0, 0.68, 0)
-Button.Text             = "Check Key"
-Button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-Button.TextColor3       = Color3.new(1, 1, 1)
-Button.Font             = Enum.Font.GothamBold
-Button.TextSize         = 13
-Button.BorderSizePixel  = 0
-Instance.new("UICorner", Button).CornerRadius = UDim.new(0, 8)
+local function corner(radius, parent)
+	return create("UICorner", { CornerRadius = UDim.new(0, radius or 12), Parent = parent })
+end
 
-Button.MouseEnter:Connect(function()
-    TweenService:Create(Button, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(70, 70, 70)}):Play()
-end)
-Button.MouseLeave:Connect(function()
-    TweenService:Create(Button, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(40, 40, 40)}):Play()
-end)
+local function stroke(parent, transparency, color, thickness)
+	return create("UIStroke", {
+		Color = color or THEME.Stroke,
+		Transparency = transparency == nil and 0.9 or transparency,
+		Thickness = thickness or 1,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+		Parent = parent,
+	})
+end
 
-TweenService:Create(Frame, TweenInfo.new(0.4, Enum.EasingStyle.Back), {Size = UDim2.new(0, 340, 0, 210)}):Play()
-TweenService:Create(blur,  TweenInfo.new(0.4), {Size = 18}):Play()
+local function padding(parent, all, l, r, t, b)
+	return create("UIPadding", {
+		PaddingLeft = UDim.new(0, l or all or 0),
+		PaddingRight = UDim.new(0, r or all or 0),
+		PaddingTop = UDim.new(0, t or all or 0),
+		PaddingBottom = UDim.new(0, b or all or 0),
+		Parent = parent,
+	})
+end
 
--- =====================
--- LOGICA CHECK KEY
--- =====================
-local checking = false
+local function tween(inst, info, goal)
+	local t = TweenService:Create(inst, info, goal)
+	t:Play()
+	return t
+end
 
-local SCRIPT_URL = "https://raw.githubusercontent.com/eduardoelcrack/RATAHUBB/refs/heads/main/RATAHUB"
+local function clamp(v, lo, hi)
+	return math.min(hi, math.max(lo, v))
+end
 
-Button.MouseButton1Click:Connect(function()
-    if checking then return end
-    checking = true
+-- Adds a UIScale and wires hover/press feedback (no layout size change).
+local function attachInteract(button, opts)
+	opts = opts or {}
+	local hoverScale = opts.hover or 1.02
+	local pressScale = opts.press or 0.97
+	local scale = create("UIScale", { Scale = 1, Parent = button })
+	local hovered = false
 
-    local key = TextBox.Text
+	button.MouseEnter:Connect(function()
+		hovered = true
+		tween(scale, HOVER, { Scale = hoverScale })
+		if opts.onHover then opts.onHover(true) end
+	end)
+	button.MouseLeave:Connect(function()
+		hovered = false
+		tween(scale, HOVER, { Scale = 1 })
+		if opts.onHover then opts.onHover(false) end
+	end)
+	button.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			tween(scale, PRESS, { Scale = pressScale })
+		end
+	end)
+	button.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			tween(scale, PRESS, { Scale = hovered and hoverScale or 1 })
+		end
+	end)
+	return scale
+end
 
-    if key == "" then
-        Button.Text = "Ingresa una key!"
-        task.wait(1.5)
-        Button.Text = "Check Key"
-        checking = false
-        return
-    end
+--=====================================================================
+-- SHARED SCREENGUI + NOTIFICATION LAYER
+--=====================================================================
+local screenGui = create("ScreenGui", {
+	Name = "RATAHUBGui",
+	ResetOnSpawn = false,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	IgnoreGuiInset = true,
+	DisplayOrder = 10,
+	Parent = playerGui,
+})
 
-    Button.Text = "Verificando..."
+local notifRoot = create("Frame", {
+	Name = "Notifications",
+	AnchorPoint = Vector2.new(1, 0),
+	Position = UDim2.new(1, -20, 0, 20),
+	Size = UDim2.fromOffset(280, 0),
+	AutomaticSize = Enum.AutomaticSize.Y,
+	BackgroundTransparency = 1,
+	ZIndex = 50,
+	Parent = screenGui,
+})
+create("UIListLayout", {
+	Padding = UDim.new(0, 10),
+	HorizontalAlignment = Enum.HorizontalAlignment.Right,
+	SortOrder = Enum.SortOrder.LayoutOrder,
+	Parent = notifRoot,
+})
 
-    local ok, response = pcall(function()
-        return game:HttpGet("https://key-sistem-9avv.onrender.com/check?key=" .. key)
-    end)
+--=====================================================================
+-- RATAHUB FRAMEWORK TABLE
+--=====================================================================
+local RATAHUB = {}
+RATAHUB.__index = RATAHUB
 
-    if not ok or response == nil then
-        Button.Text = "Error de red, intenta de nuevo"
-        task.wait(2)
-        Button.Text = "Check Key"
-        checking = false
-        return
-    end
+-- Generic notification (replacement for Rayfield:Notify)
+function RATAHUB:Notify(cfg)
+	cfg = cfg or {}
+	local card = create("Frame", {
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = THEME.Card,
+		BackgroundTransparency = 0,
+		BorderSizePixel = 0,
+		Position = UDim2.fromOffset(40, 0),
+		ZIndex = 51,
+		Parent = notifRoot,
+	})
+	corner(12, card)
+	stroke(card, 0.85, THEME.Primary)
+	padding(card, nil, 14, 14, 12, 12)
+	create("UIListLayout", {
+		Padding = UDim.new(0, 4),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = card,
+	})
+	create("TextLabel", {
+		LayoutOrder = 1,
+		Size = UDim2.new(1, 0, 0, 18),
+		BackgroundTransparency = 1,
+		Text = cfg.Title or "Notification",
+		TextColor3 = THEME.Foreground,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT_BOLD, TextSize = 14,
+		ZIndex = 52,
+		Parent = card,
+	})
+	create("TextLabel", {
+		LayoutOrder = 2,
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1,
+		Text = cfg.Content or "",
+		TextColor3 = THEME.Muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextWrapped = true,
+		Font = FONT, TextSize = 12,
+		ZIndex = 52,
+		Parent = card,
+	})
 
-    if response == "valid" then
-        Button.Text = "Correcto ✔"
+	-- enter
+	card.BackgroundTransparency = 1
+	tween(card, NOTIF_IN, { Position = UDim2.fromOffset(0, 0), BackgroundTransparency = 0 })
 
-        task.wait(0.8)
+	local dismissed = false
+	local function dismiss()
+		if dismissed then return end
+		dismissed = true
+		local out = tween(card, NOTIF_OUT, { Position = UDim2.fromOffset(40, 0), BackgroundTransparency = 1 })
+		out.Completed:Connect(function()
+			card:Destroy()
+		end)
+	end
 
-        TweenService:Create(Frame, TweenInfo.new(0.3), {Size = UDim2.new(0, 0, 0, 0)}):Play()
-        TweenService:Create(blur,  TweenInfo.new(0.3), {Size = 0}):Play()
-        task.wait(0.35)
-        ScreenGui:Destroy()
-        blur:Destroy()
+	task.delay(cfg.Duration or 3, dismiss)
+	return { Dismiss = dismiss }
+end
 
-        -- Poner el acceso JUSTO antes de ejecutar
-        getgenv().KeySystemPassed = "RATAHUB-ACCESS-OK"
+--=====================================================================
+-- WINDOW
+--=====================================================================
+local Window = {}
+Window.__index = Window
 
-        local s = game:HttpGet(SCRIPT_URL)
-        local f = loadstring(s)
-        if f then
-            f()
-        else
-            warn("[RATAHUB] Error: el script no compilo")
-        end
+function RATAHUB:CreateWindow(cfg)
+	cfg = cfg or {}
 
-    else
-        Button.Text = "Incorrecto ❌"
-        task.wait(1.5)
-        Button.Text = "Check Key"
-        checking = false
-    end
-end)
+	-- The window is anchored at its CENTER and pinned to the screen centre on
+	-- creation. Because the AnchorPoint is (0.5, 0.5), resizing only alters
+	-- Size and the window expands/shrinks equally around that centre, and it
+	-- starts perfectly centred on any screen resolution. It IS draggable from
+	-- the top bar (see the DRAG section below); dragging offsets its Position
+	-- without ever changing its Size.
+	local window = create("Frame", {
+		Name = "Window",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(START_W, START_H),
+		BackgroundColor3 = THEME.Panel,
+		BorderSizePixel = 0,
+		Parent = screenGui,
+	})
+	corner(22, window)
+	stroke(window, 0.9)
 
--- =====================
--- DRAG
--- =====================
-local dragging, dragInput, dragStart, startPos
+	local self = setmetatable({
+		gui = window,
+		tabs = {},
+		navButtons = {},
+		_activeTab = nil,
+	}, Window)
 
-TopBar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging  = true
-        dragStart = input.Position
-        startPos  = Frame.Position
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
-            end
-        end)
-    end
-end)
+	--------------------------------------------------------------
+	-- TOP BAR (header — also the drag handle)
+	--------------------------------------------------------------
+	local topBar = create("Frame", {
+		Name = "TopBar",
+		Size = UDim2.new(1, 0, 0, TOPBAR_H),
+		BackgroundColor3 = THEME.Sidebar,
+		BackgroundTransparency = 0.15,
+		BorderSizePixel = 0,
+		Parent = window,
+	})
+	corner(22, topBar)
+	create("Frame", {
+		Size = UDim2.new(1, 0, 0, 22),
+		Position = UDim2.new(0, 0, 1, -22),
+		BackgroundColor3 = THEME.Sidebar,
+		BackgroundTransparency = 0.15,
+		BorderSizePixel = 0,
+		Parent = topBar,
+	})
+	create("Frame", {
+		Name = "Divider",
+		Size = UDim2.new(1, 0, 0, 1),
+		Position = UDim2.new(0, 0, 1, -1),
+		BackgroundColor3 = THEME.Stroke,
+		BackgroundTransparency = 0.9,
+		BorderSizePixel = 0,
+		Parent = topBar,
+	})
+	padding(topBar, nil, 16, 12, 0, 0)
 
-TopBar.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement then
-        dragInput = input
-    end
-end)
+	local logo = create("Frame", {
+		Size = UDim2.fromOffset(28, 28),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		AnchorPoint = Vector2.new(0, 0.5),
+		BackgroundColor3 = THEME.Primary,
+		BackgroundTransparency = 0.82,
+		BorderSizePixel = 0,
+		Parent = topBar,
+	})
+	corner(9, logo)
+	create("TextLabel", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = "⬡",
+		TextColor3 = THEME.Primary,
+		Font = FONT_BOLD, TextSize = 16,
+		Parent = logo,
+	})
+	create("TextLabel", {
+		Name = "Title",
+		Position = UDim2.fromOffset(38, 0),
+		Size = UDim2.new(0, 92, 1, 0),
+		BackgroundTransparency = 1,
+		Text = cfg.Title or "RATAHUB",
+		TextColor3 = THEME.Foreground,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT_BOLD, TextSize = 15,
+		Parent = topBar,
+	})
+		local badge = create("Frame", {
+			Position = UDim2.fromOffset(136, 16),
+			Size = UDim2.fromOffset(62, 20),
+		BackgroundColor3 = THEME.Secondary,
+		BorderSizePixel = 0,
+		Parent = topBar,
+	})
+	corner(6, badge)
+	stroke(badge, 0.9)
+	create("TextLabel", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = cfg.SubTitle or "PREMIUM",
+		TextColor3 = THEME.Muted,
+		Font = FONT_MONO, TextSize = 10,
+		Parent = badge,
+	})
 
-UIS.InputChanged:Connect(function(input)
-    if input == dragInput and dragging then
-        local delta = input.Position - dragStart
-        Frame.Position = UDim2.new(
-            startPos.X.Scale,
-            startPos.X.Offset + delta.X,
-            startPos.Y.Scale,
-            startPos.Y.Offset + delta.Y
-        )
-    end
-end)
+	-- Top-right control buttons (minimize / close). Rounded hover background,
+	-- press feedback via UIScale, and a destructive tint for Close. They are
+	-- TextButtons that sink input, so a click on them never reaches
+	-- topBar.InputBegan and therefore never starts a drag.
+	local function controlButton(name, symbol, xOffset, hoverColor, hoverText)
+		local btn = create("TextButton", {
+			Name = name,
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, xOffset, 0.5, 0),
+			Size = UDim2.fromOffset(28, 28),
+			BackgroundColor3 = hoverColor,
+			BackgroundTransparency = 1,
+			Text = symbol,
+			TextColor3 = THEME.Muted,
+			Font = FONT_BOLD, TextSize = 18,
+			AutoButtonColor = false,
+			Parent = topBar,
+		})
+		corner(8, btn)
+		local scale = create("UIScale", { Scale = 1, Parent = btn })
+		local isDestructive = hoverColor == THEME.Destructive
+		btn.MouseEnter:Connect(function()
+			tween(btn, HOVER, {
+				BackgroundTransparency = isDestructive and 0.1 or 0.85,
+				TextColor3 = hoverText,
+			})
+		end)
+		btn.MouseLeave:Connect(function()
+			tween(btn, HOVER, { BackgroundTransparency = 1, TextColor3 = THEME.Muted })
+			tween(scale, PRESS, { Scale = 1 })
+		end)
+		btn.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				tween(scale, PRESS, { Scale = 0.88 })
+			end
+		end)
+		btn.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				tween(scale, PRESS, { Scale = 1 })
+			end
+		end)
+		return btn
+	end
+
+	local body -- forward ref for minimize
+	local minimized = false
+	local minimizeBtn = controlButton("Minimize", "−", -34, THEME.Secondary, THEME.Foreground)
+	local closeBtn = controlButton("Close", "✕", 0, THEME.Destructive, THEME.Foreground)
+
+	closeBtn.MouseButton1Click:Connect(function()
+		local t = tween(window, PRESS, { Size = UDim2.fromOffset(window.AbsoluteSize.X, 0) })
+		t.Completed:Connect(function()
+			screenGui.Enabled = false
+		end)
+	end)
+
+	--------------------------------------------------------------
+	-- RESIZE (center-locked, size-only). The window centre is FIXED
+	-- by its AnchorPoint (0.5, 0.5) + Position (0.5, 0.5) scale, so a
+	-- resize NEVER touches window.Position — it only sets window.Size.
+	-- Each corner captures the mouse and W/H exactly ONCE, then maps
+	-- the raw mouse delta (current - original) to a symmetric size
+	-- change (×2, because one side moves while the opposite side
+	-- expands equally around the fixed centre). Nothing accumulates.
+	--------------------------------------------------------------
+	-- Shared interaction guard. Dragging and resizing read/write these two
+	-- flags so the two systems are strictly mutually exclusive: a resize can
+	-- never begin while a drag is active, and a drag can never begin while a
+	-- resize is active. They are declared here, ABOVE both systems, so both
+	-- close over the exact same booleans.
+	local dragActive = false
+	local resizeActive = false
+
+	-- signX / signY: how this corner's dx / dy map to width / height.
+	--   +1 -> dragging in the positive axis grows the dimension
+	--   -1 -> dragging in the positive axis shrinks the dimension
+	local CORNERS = {
+		{ id = "tl", ax = 0, ay = 0, pos = UDim2.new(0, 0, 0, 0), signX = -1, signY = -1 },
+		{ id = "tr", ax = 1, ay = 0, pos = UDim2.new(1, 0, 0, 0), signX =  1, signY = -1 },
+		{ id = "bl", ax = 0, ay = 1, pos = UDim2.new(0, 0, 1, 0), signX = -1, signY =  1 },
+		{ id = "br", ax = 1, ay = 1, pos = UDim2.new(1, 0, 1, 0), signX =  1, signY =  1 },
+	}
+
+	-- Invisible hitbox, sized generously for easy grabbing.
+	local HANDLE = 22
+
+	for _, c in ipairs(CORNERS) do
+		local handle = create("TextButton", {
+			Name = "Resize_" .. c.id,
+			Active = true,
+			AnchorPoint = Vector2.new(c.ax, c.ay),
+			Position = c.pos,
+			Size = UDim2.fromOffset(HANDLE, HANDLE),
+			BackgroundTransparency = 1,
+			Text = "",
+			AutoButtonColor = false,
+			ZIndex = 30,
+			Parent = window,
+		})
+
+		local resizing = false
+		local origin -- frozen { mouseX, mouseY, width, height }, captured ONCE
+		local moveConn, endConn
+
+		local function stopResize()
+			resizing = false
+			resizeActive = false
+			origin = nil
+			if moveConn then moveConn:Disconnect() moveConn = nil end
+			if endConn then endConn:Disconnect() endConn = nil end
+		end
+
+		handle.InputBegan:Connect(function(input)
+			if input.UserInputType ~= Enum.UserInputType.MouseButton1
+				and input.UserInputType ~= Enum.UserInputType.Touch then
+				return
+			end
+			-- Resize has priority, but never start one mid-drag.
+			if resizing or dragActive then return end
+			resizeActive = true
+
+			-- Freeze the mouse position and the current size exactly once.
+			-- Every frame measures the delta from THESE frozen values, so the
+			-- window can be resized over and over from any corner without any
+			-- drift or accumulation.
+			origin = {
+				mouseX = input.Position.X,
+				mouseY = input.Position.Y,
+				width = window.AbsoluteSize.X,
+				height = window.AbsoluteSize.Y,
+			}
+			resizing = true
+
+			moveConn = UserInputService.InputChanged:Connect(function(moveInput)
+				if not resizing or not origin then return end
+				if moveInput.UserInputType ~= Enum.UserInputType.MouseMovement
+					and moveInput.UserInputType ~= Enum.UserInputType.Touch then
+					return
+				end
+
+				local dx = moveInput.Position.X - origin.mouseX
+				local dy = moveInput.Position.Y - origin.mouseY
+
+				-- ×2 so the window grows/shrinks symmetrically around the
+				-- fixed centre while the grabbed corner tracks the cursor.
+				local newW = clamp(origin.width  + c.signX * dx * 2, MIN_W, MAX_W)
+				local newH = clamp(origin.height + c.signY * dy * 2, MIN_H, MAX_H)
+
+				-- ONLY Size changes. Position is never touched, so the centre
+				-- stays exactly put.
+				window.Size = UDim2.fromOffset(newW, newH)
+			end)
+
+			-- The release is tracked GLOBALLY, not on the handle. The handle is
+			-- a tiny hitbox the pointer leaves the instant you start dragging,
+			-- so handle.InputEnded would miss the release and leave the move
+			-- connection alive. Disconnecting both here guarantees there is
+			-- never a leftover resize connection.
+			endConn = UserInputService.InputEnded:Connect(function(endInput)
+				if endInput.UserInputType == Enum.UserInputType.MouseButton1
+					or endInput.UserInputType == Enum.UserInputType.Touch then
+					stopResize()
+				end
+			end)
+		end)
+	end
+
+	--------------------------------------------------------------
+	-- DRAG (top bar only, jump-free). Draggable from the header. The
+	-- window keeps its AnchorPoint (0.5, 0.5); it starts centred and
+	-- then follows the mouse from wherever it currently is.
+	--
+	-- Zero-jump principle: on press we snapshot the mouse position and
+	-- the window's CURRENT UDim2 exactly once. Every move computes the
+	-- absolute delta from that ORIGINAL mouse point and adds it to the
+	-- ORIGINAL position — nothing is accumulated frame-to-frame and the
+	-- current position is never re-sampled mid-drag, so grabbing the bar
+	-- moves the window 1:1 with the cursor with no snap.
+	--
+	-- The minimize/close controls are TextButtons that sink input, so a
+	-- click on them never reaches topBar.InputBegan and never drags.
+	--------------------------------------------------------------
+	do
+		local dragging = false
+		local dragStartX, dragStartY   -- mouse position frozen at press
+		local startScaleX, startOffX   -- window Position frozen at press
+		local startScaleY, startOffY
+		local moveConn, endConn
+
+		local function stopDrag()
+			dragging = false
+			dragActive = false
+			if moveConn then moveConn:Disconnect() moveConn = nil end
+			if endConn then endConn:Disconnect() endConn = nil end
+		end
+
+		topBar.InputBegan:Connect(function(input)
+			if input.UserInputType ~= Enum.UserInputType.MouseButton1
+				and input.UserInputType ~= Enum.UserInputType.Touch then
+				return
+			end
+			-- Never begin a drag while a resize is in progress.
+			if dragging or resizeActive then return end
+
+			dragging = true
+			dragActive = true
+			dragStartX, dragStartY = input.Position.X, input.Position.Y
+			local p = window.Position
+			startScaleX, startOffX = p.X.Scale, p.X.Offset
+			startScaleY, startOffY = p.Y.Scale, p.Y.Offset
+
+			moveConn = UserInputService.InputChanged:Connect(function(moveInput)
+				if not dragging then return end
+				if moveInput.UserInputType ~= Enum.UserInputType.MouseMovement
+					and moveInput.UserInputType ~= Enum.UserInputType.Touch then
+					return
+				end
+				-- Delta measured from the ORIGINAL grab point every frame.
+				local dx = moveInput.Position.X - dragStartX
+				local dy = moveInput.Position.Y - dragStartY
+				window.Position = UDim2.new(
+					startScaleX, startOffX + dx,
+					startScaleY, startOffY + dy
+				)
+			end)
+
+			-- Global release so a drag that wanders off the top bar still
+			-- ends correctly and the connection is always cleaned up.
+			endConn = UserInputService.InputEnded:Connect(function(endInput)
+				if endInput.UserInputType == Enum.UserInputType.MouseButton1
+					or endInput.UserInputType == Enum.UserInputType.Touch then
+					stopDrag()
+				end
+			end)
+		end)
+	end
+
+	--------------------------------------------------------------
+	-- BODY
+	--------------------------------------------------------------
+	body = create("Frame", {
+		Name = "Body",
+		Position = UDim2.fromOffset(0, TOPBAR_H),
+		Size = UDim2.new(1, 0, 1, -TOPBAR_H),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Parent = window,
+	})
+
+	minimizeBtn.MouseButton1Click:Connect(function()
+		minimized = not minimized
+		body.Visible = not minimized
+	end)
+
+	-- ---------- SIDEBAR ----------
+	local sidebar = create("Frame", {
+		Name = "Sidebar",
+		Size = UDim2.new(0, SIDEBAR_W, 1, 0),
+		BackgroundColor3 = THEME.Sidebar,
+		BackgroundTransparency = 0.25,
+		BorderSizePixel = 0,
+		Parent = body,
+	})
+	create("Frame", {
+		Name = "Divider",
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0, 0),
+		Size = UDim2.new(0, 1, 1, 0),
+		BackgroundColor3 = THEME.Stroke,
+		BackgroundTransparency = 0.9,
+		BorderSizePixel = 0,
+		Parent = sidebar,
+	})
+	padding(sidebar, nil, 14, 14, 16, 16)
+
+	create("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 16),
+		BackgroundTransparency = 1,
+		Text = "MENU",
+		TextColor3 = THEME.Muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT_BOLD, TextSize = 11,
+		Parent = sidebar,
+	})
+
+	local nav = create("Frame", {
+		Position = UDim2.fromOffset(0, 26),
+		Size = UDim2.new(1, 0, 1, -100),
+		BackgroundTransparency = 1,
+		Parent = sidebar,
+	})
+	local highlight = create("Frame", {
+		Name = "Highlight",
+		Size = UDim2.new(1, 0, 0, 40),
+		BackgroundColor3 = THEME.Primary,
+		BackgroundTransparency = 0.85,
+		BorderSizePixel = 0,
+		Visible = false,
+		Parent = nav,
+	})
+	corner(10, highlight)
+	stroke(highlight, 0.8, THEME.Primary)
+
+	-- footer premium card
+	local footer = create("Frame", {
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.new(1, 0, 0, 56),
+		BackgroundColor3 = THEME.Card,
+		BorderSizePixel = 0,
+		Parent = sidebar,
+	})
+	corner(12, footer)
+	stroke(footer, 0.9)
+	padding(footer, nil, 10, 10, 0, 0)
+	local avatar = create("Frame", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.fromOffset(34, 34),
+		BackgroundColor3 = THEME.Primary,
+		BackgroundTransparency = 0.8,
+		BorderSizePixel = 0,
+		Parent = footer,
+	})
+	corner(10, avatar)
+	create("TextLabel", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = "RH",
+		TextColor3 = THEME.Primary,
+		Font = FONT_BOLD, TextSize = 12,
+		Parent = avatar,
+	})
+	create("TextLabel", {
+		Position = UDim2.fromOffset(44, 10),
+		Size = UDim2.new(1, -44, 0, 16),
+		BackgroundTransparency = 1,
+		Text = "Premium",
+		TextColor3 = THEME.Foreground,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT_BOLD, TextSize = 13,
+		Parent = footer,
+	})
+	create("TextLabel", {
+		Position = UDim2.fromOffset(44, 28),
+		Size = UDim2.new(1, -44, 0, 14),
+		BackgroundTransparency = 1,
+		Text = cfg.Version or "v2.4.1",
+		TextColor3 = THEME.Muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT_MONO, TextSize = 11,
+		Parent = footer,
+	})
+
+	-- ---------- CONTENT ----------
+	local content = create("Frame", {
+		Name = "Content",
+		Position = UDim2.fromOffset(SIDEBAR_W, 0),
+		Size = UDim2.new(1, -SIDEBAR_W, 1, 0),
+		BackgroundTransparency = 1,
+		Parent = body,
+	})
+	local header = create("Frame", {
+		Size = UDim2.new(1, 0, 0, 62),
+		BackgroundTransparency = 1,
+		Parent = content,
+	})
+	create("Frame", {
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.new(1, 0, 0, 1),
+		BackgroundColor3 = THEME.Stroke,
+		BackgroundTransparency = 0.9,
+		BorderSizePixel = 0,
+		Parent = header,
+	})
+	padding(header, nil, 20, 20, 0, 0)
+	local headerTitle = create("TextLabel", {
+		Position = UDim2.fromOffset(0, 14),
+		Size = UDim2.new(1, 0, 0, 20),
+		BackgroundTransparency = 1,
+		Text = "",
+		TextColor3 = THEME.Foreground,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT_BOLD, TextSize = 16,
+		Parent = header,
+	})
+	local headerSub = create("TextLabel", {
+		Position = UDim2.fromOffset(0, 35),
+		Size = UDim2.new(1, 0, 0, 16),
+		BackgroundTransparency = 1,
+		Text = "",
+		TextColor3 = THEME.Muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT, TextSize = 12,
+		Parent = header,
+	})
+
+	local scroll = create("ScrollingFrame", {
+		Name = "Scroll",
+		Position = UDim2.fromOffset(0, 62),
+		Size = UDim2.new(1, 0, 1, -62),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		ScrollBarImageColor3 = THEME.Stroke,
+		ScrollBarImageTransparency = 0.6,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Parent = content,
+	})
+	padding(scroll, 20)
+	create("UIListLayout", {
+		Padding = UDim.new(0, 14),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = scroll,
+	})
+
+	-- expose internals to tab builders
+	self._scroll = scroll
+	self._nav = nav
+	self._highlight = highlight
+	self._headerTitle = headerTitle
+	self._headerSub = headerSub
+
+	return self
+end
+
+-- Switch active tab: page visibility, header text, nav colors, highlight.
+function Window:_select(id)
+	if self._activeTab == id then return end
+	self._activeTab = id
+	self.gui:SetAttribute("ActiveTab", id)
+
+	for tid, tab in pairs(self.tabs) do
+		tab.page.Visible = (tid == id)
+	end
+
+	for tid, nb in pairs(self.navButtons) do
+		local active = (tid == id)
+		tween(nb.icon, HOVER, { TextColor3 = active and THEME.Primary or THEME.Muted })
+		tween(nb.label, HOVER, { TextColor3 = active and THEME.Foreground or THEME.Muted })
+	end
+
+	local nb = self.navButtons[id]
+	if nb then
+		self._highlight.Visible = true
+		tween(self._highlight, SLIDE, { Position = UDim2.fromOffset(0, nb.index * NAV_ITEM_H) })
+	end
+
+	local tab = self.tabs[id]
+	if tab then
+		self._headerTitle.Text = tab.title
+		self._headerSub.Text = tab.subtitle
+	end
+end
+
+--=====================================================================
+-- TAB
+--=====================================================================
+local Tab = {}
+Tab.__index = Tab
+
+function Window:CreateTab(cfg)
+	cfg = cfg or {}
+	local id = cfg.Name and cfg.Name:lower():gsub("%s", "") or ("tab" .. (#self.navButtons + 1))
+	local index = 0
+	for _ in pairs(self.navButtons) do index += 1 end
+
+	-- nav button
+	local btn = create("TextButton", {
+		Name = id,
+		Position = UDim2.fromOffset(0, index * NAV_ITEM_H),
+		Size = UDim2.new(1, 0, 0, 40),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+		Parent = self._nav,
+	})
+	padding(btn, nil, 12, 12, 0, 0)
+	local icon = create("TextLabel", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.fromOffset(20, 20),
+		BackgroundTransparency = 1,
+		Text = cfg.Icon or "•",
+		TextColor3 = THEME.Muted,
+		Font = FONT, TextSize = 15,
+		Parent = btn,
+	})
+	local label = create("TextLabel", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 30, 0.5, 0),
+		Size = UDim2.new(1, -30, 1, 0),
+		BackgroundTransparency = 1,
+		Text = cfg.Name or "Tab",
+		TextColor3 = THEME.Muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT, TextSize = 14,
+		Parent = btn,
+	})
+
+	self.navButtons[id] = { button = btn, icon = icon, label = label, index = index }
+
+	btn.MouseButton1Click:Connect(function()
+		self:_select(id)
+	end)
+	btn.MouseEnter:Connect(function()
+		if self._activeTab ~= id then
+			tween(icon, HOVER, { TextColor3 = THEME.Foreground })
+			tween(label, HOVER, { TextColor3 = THEME.Foreground })
+		end
+	end)
+	btn.MouseLeave:Connect(function()
+		if self._activeTab ~= id then
+			tween(icon, HOVER, { TextColor3 = THEME.Muted })
+			tween(label, HOVER, { TextColor3 = THEME.Muted })
+		end
+	end)
+
+	-- page (stacked; only active is visible)
+	local page = create("Frame", {
+		Name = id .. "_page",
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1,
+		LayoutOrder = index,
+		Visible = false,
+		Parent = self._scroll,
+	})
+	create("UIListLayout", {
+		Padding = UDim.new(0, 14),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = page,
+	})
+
+	local tab = setmetatable({
+		window = self,
+		id = id,
+		page = page,
+		title = cfg.Name or "Tab",
+		subtitle = cfg.SubTitle or "",
+		_order = 0,
+		_currentCard = nil,
+	}, Tab)
+
+	self.tabs[id] = tab
+
+	-- auto-select first tab
+	if index == 0 then
+		task.defer(function() self:_select(id) end)
+	end
+	return tab
+end
+
+-- internal: next layout order
+function Tab:_next()
+	self._order += 1
+	return self._order
+end
+
+-- internal: a card that grows with content
+function Tab:_card()
+	local c = create("Frame", {
+		LayoutOrder = self:_next(),
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = THEME.Card,
+		BorderSizePixel = 0,
+		Parent = self.page,
+	})
+	corner(14, c)
+	stroke(c, 0.9)
+	padding(c, nil, 16, 16, 14, 14)
+	create("UIListLayout", {
+		Padding = UDim.new(0, 10),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		HorizontalAlignment = Enum.HorizontalAlignment.Left,
+		Parent = c,
+	})
+	c:SetAttribute("Order", 0)
+	self._currentCard = c
+	return c
+end
+
+function Tab:_ensureCard()
+	if not self._currentCard then self:_card() end
+	return self._currentCard
+end
+
+function Tab:_cardOrder(card)
+	local o = (card:GetAttribute("Order") or 0) + 1
+	card:SetAttribute("Order", o)
+	return o
+end
+
+-- CreateSection: starts a new card with a section label
+function Tab:CreateSection(text)
+	local card = self:_card()
+	create("TextLabel", {
+		LayoutOrder = self:_cardOrder(card),
+		Size = UDim2.new(1, 0, 0, 14),
+		BackgroundTransparency = 1,
+		Text = tostring(text or "Section"),
+		TextColor3 = THEME.Muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT_BOLD, TextSize = 11,
+		Parent = card,
+	})
+	return card
+end
+
+--=====================================================================
+-- CONTROL: DIVIDER (subtle hairline inside the current card)
+--=====================================================================
+function Tab:CreateDivider()
+	local card = self:_ensureCard()
+	-- A 1px line wrapped in a tiny container so the surrounding UIListLayout
+	-- padding stays consistent and the divider never adds large gaps.
+	local holder = create("Frame", {
+		LayoutOrder = self:_cardOrder(card),
+		Size = UDim2.new(1, 0, 0, 1),
+		BackgroundColor3 = THEME.Stroke,
+		BackgroundTransparency = 0.88,
+		BorderSizePixel = 0,
+		Parent = card,
+	})
+	return { Instance = holder }
+end
+
+--=====================================================================
+-- CONTROL: PARAGRAPH (title + wrapped multiline body, its own card)
+--=====================================================================
+function Tab:CreateParagraph(cfg)
+	cfg = cfg or {}
+	local card = self:_card()
+
+	local title = create("TextLabel", {
+		LayoutOrder = self:_cardOrder(card),
+		Size = UDim2.new(1, 0, 0, 18),
+		BackgroundTransparency = 1,
+		Text = tostring(cfg.Title or "Paragraph"),
+		TextColor3 = THEME.Foreground,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT_BOLD, TextSize = 14,
+		Parent = card,
+	})
+	local content = create("TextLabel", {
+		LayoutOrder = self:_cardOrder(card),
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1,
+		Text = tostring(cfg.Content or ""),
+		TextColor3 = THEME.Muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextWrapped = true,
+		Font = FONT, TextSize = 12,
+		Parent = card,
+	})
+
+	-- Following controls should start their own card, not pile into the
+	-- paragraph card.
+	self._currentCard = nil
+
+	local handle = {}
+	function handle:SetTitle(t) title.Text = tostring(t) end
+	function handle:SetContent(t) content.Text = tostring(t) end
+	function handle:Set(t) content.Text = tostring(t) end
+	function handle:Get() return content.Text end
+	return handle
+end
+
+--=====================================================================
+-- CONTROL: LABEL (lightweight, wraps, lives in the current card)
+--=====================================================================
+function Tab:CreateLabel(cfg)
+	local text
+	if type(cfg) == "table" then
+		text = cfg.Text
+	else
+		text = cfg
+	end
+	local card = self:_ensureCard()
+	local lbl = create("TextLabel", {
+		LayoutOrder = self:_cardOrder(card),
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1,
+		Text = tostring(text or "Label"),
+		TextColor3 = THEME.Foreground,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextWrapped = true,
+		Font = FONT, TextSize = 13,
+		Parent = card,
+	})
+	local handle = {}
+	function handle:Set(t) lbl.Text = tostring(t) end
+	function handle:Get() return lbl.Text end
+	return handle
+end
+
+--=====================================================================
+-- CONTROL: TOGGLE  (UIScale overshoot; no layout-size change)
+--=====================================================================
+function Tab:CreateToggle(cfg)
+	cfg = cfg or {}
+	local card = self:_ensureCard()
+	local state = cfg.CurrentValue and true or false
+
+	local row = create("Frame", {
+		LayoutOrder = self:_cardOrder(card),
+		Size = UDim2.new(1, 0, 0, cfg.Description and 44 or 30),
+		BackgroundTransparency = 1,
+		Parent = card,
+	})
+	create("TextLabel", {
+		Size = UDim2.new(1, -60, 0, 18),
+		Position = UDim2.fromOffset(0, cfg.Description and 3 or 6),
+		BackgroundTransparency = 1,
+		Text = cfg.Name or "Toggle",
+		TextColor3 = THEME.Foreground,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT, TextSize = 14,
+		Parent = row,
+	})
+	if cfg.Description then
+		create("TextLabel", {
+			Size = UDim2.new(1, -60, 0, 14),
+			Position = UDim2.fromOffset(0, 23),
+			BackgroundTransparency = 1,
+			Text = cfg.Description,
+			TextColor3 = THEME.Muted,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Font = FONT, TextSize = 11,
+			Parent = row,
+		})
+	end
+
+	local track = create("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(44, 24),
+		BackgroundColor3 = state and THEME.Primary or THEME.Secondary,
+		Text = "",
+		AutoButtonColor = false,
+		Parent = row,
+	})
+		corner(12, track)
+		local knob = create("Frame", {
+			AnchorPoint = Vector2.new(0, 0.5),
+		Position = state and UDim2.new(1, -22, 0.5, 0) or UDim2.new(0, 2, 0.5, 0),
+		Size = UDim2.fromOffset(20, 20),
+		BackgroundColor3 = THEME.Foreground,
+		BorderSizePixel = 0,
+		Parent = track,
+	})
+	corner(10, knob)
+	local knobScale = create("UIScale", { Scale = 1, Parent = knob })
+
+	local handle = {}
+	local function apply(animated)
+		local info = animated and TOGGLE or TweenInfo.new(0)
+		tween(track, info, { BackgroundColor3 = state and THEME.Primary or THEME.Secondary })
+		tween(knob, animated and TOGGLE_KNOB or info,
+			{ Position = state and UDim2.new(1, -22, 0.5, 0) or UDim2.new(0, 2, 0.5, 0) })
+		if animated then
+			-- subtle scale pulse via UIScale (does not affect layout)
+			local up = tween(knobScale, PULSE_UP, { Scale = 1.14 })
+			up.Completed:Connect(function()
+				tween(knobScale, PULSE_DOWN, { Scale = 1 })
+			end)
+		end
+	end
+
+	track.MouseButton1Click:Connect(function()
+		state = not state
+		apply(true)
+		if cfg.Callback then task.spawn(cfg.Callback, state) end
+	end)
+
+	function handle:Set(v)
+		state = v and true or false
+		apply(true)
+		if cfg.Callback then task.spawn(cfg.Callback, state) end
+	end
+	function handle:Get() return state end
+	return handle
+end
+
+--=====================================================================
+-- CONTROL: SLIDER
+--=====================================================================
+function Tab:CreateSlider(cfg)
+	cfg = cfg or {}
+	local card = self:_ensureCard()
+	local minV = cfg.Range and cfg.Range[1] or 0
+	local maxV = cfg.Range and cfg.Range[2] or 100
+	local inc = cfg.Increment or 1
+	local suffix = cfg.Suffix or ""
+	local value = clamp(cfg.CurrentValue or minV, minV, maxV)
+
+	local row = create("Frame", {
+		LayoutOrder = self:_cardOrder(card),
+		Size = UDim2.new(1, 0, 0, 46),
+		BackgroundTransparency = 1,
+		Parent = card,
+	})
+	create("TextLabel", {
+		Size = UDim2.new(1, -80, 0, 16),
+		BackgroundTransparency = 1,
+		Text = cfg.Name or "Slider",
+		TextColor3 = THEME.Foreground,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT, TextSize = 14,
+		Parent = row,
+	})
+	local valueLabel = create("TextLabel", {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0, 0),
+		Size = UDim2.fromOffset(80, 16),
+		BackgroundTransparency = 1,
+		Text = tostring(value) .. suffix,
+		TextColor3 = THEME.Primary,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Font = FONT_MONO, TextSize = 13,
+		Parent = row,
+	})
+
+	local track = create("TextButton", {
+		Position = UDim2.fromOffset(0, 30),
+		Size = UDim2.new(1, 0, 0, 6),
+		BackgroundColor3 = THEME.Secondary,
+		Text = "",
+		AutoButtonColor = false,
+		Parent = row,
+	})
+	corner(3, track)
+	local function pct() return (value - minV) / (maxV - minV) end
+	local fill = create("Frame", {
+		Size = UDim2.fromScale(pct(), 1),
+		BackgroundColor3 = THEME.Primary,
+		BorderSizePixel = 0,
+		Parent = track,
+	})
+	corner(3, fill)
+	local knob = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(pct(), 0, 0.5, 0),
+		Size = UDim2.fromOffset(14, 14),
+		BackgroundColor3 = THEME.Foreground,
+		BorderSizePixel = 0,
+		ZIndex = 2,
+		Parent = track,
+	})
+	corner(7, knob)
+
+	local handle = {}
+	local dragging = false
+	local moveConn, endConn
+
+	local function render()
+		local p = pct()
+		fill.Size = UDim2.fromScale(p, 1)
+		knob.Position = UDim2.new(p, 0, 0.5, 0)
+		valueLabel.Text = tostring(value) .. suffix
+	end
+	local function setFromX(px)
+		local rel = clamp((px - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+		local raw = minV + rel * (maxV - minV)
+		value = clamp(math.floor((raw / inc) + 0.5) * inc, minV, maxV)
+		render()
+		if cfg.Callback then task.spawn(cfg.Callback, value) end
+	end
+
+	track.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			tween(knob, HOVER, { Size = UDim2.fromOffset(18, 18) })
+			setFromX(input.Position.X)
+
+			moveConn = UserInputService.InputChanged:Connect(function(moveInput)
+				if dragging and (moveInput.UserInputType == Enum.UserInputType.MouseMovement
+					or moveInput.UserInputType == Enum.UserInputType.Touch) then
+					setFromX(moveInput.Position.X)
+				end
+			end)
+			endConn = UserInputService.InputEnded:Connect(function(endInput)
+				if endInput.UserInputType == Enum.UserInputType.MouseButton1
+					or endInput.UserInputType == Enum.UserInputType.Touch then
+					dragging = false
+					tween(knob, HOVER, { Size = UDim2.fromOffset(14, 14) })
+					if moveConn then moveConn:Disconnect() moveConn = nil end
+					if endConn then endConn:Disconnect() endConn = nil end
+				end
+			end)
+		end
+	end)
+
+	function handle:Set(v)
+		-- Respect Range and Increment exactly like a user drag would.
+		local raw = clamp(v, minV, maxV)
+		value = clamp(math.floor((raw / inc) + 0.5) * inc, minV, maxV)
+		render()
+		if cfg.Callback then task.spawn(cfg.Callback, value) end
+	end
+	function handle:Get() return value end
+	return handle
+end
+
+--=====================================================================
+-- CONTROL: DROPDOWN (overlay list; never displaces siblings)
+--=====================================================================
+function Tab:CreateDropdown(cfg)
+	cfg = cfg or {}
+	local card = self:_ensureCard()
+	local options = cfg.Options or {}
+	local current = cfg.CurrentOption or options[1] or ""
+
+	local row = create("Frame", {
+		LayoutOrder = self:_cardOrder(card),
+		Size = UDim2.new(1, 0, 0, 40),
+		BackgroundTransparency = 1,
+		ClipsDescendants = false,
+		ZIndex = 5,
+		Parent = card,
+	})
+	create("TextLabel", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(0.45, 0, 1, 0),
+		BackgroundTransparency = 1,
+		Text = cfg.Name or "Dropdown",
+		TextColor3 = THEME.Foreground,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT, TextSize = 14,
+		ZIndex = 6,
+		Parent = row,
+	})
+
+	local btn = create("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.new(0.5, 0, 0, 30),
+		BackgroundColor3 = THEME.Secondary,
+		Text = "",
+		AutoButtonColor = false,
+		ZIndex = 6,
+		Parent = row,
+	})
+	corner(8, btn)
+	stroke(btn, 0.9)
+	padding(btn, nil, 12, 10, 0, 0)
+	local selectedLabel = create("TextLabel", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(1, -20, 1, 0),
+		BackgroundTransparency = 1,
+		Text = tostring(current),
+		TextColor3 = THEME.Foreground,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT, TextSize = 13,
+		ZIndex = 7,
+		Parent = btn,
+	})
+	local arrow = create("TextLabel", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(16, 16),
+		BackgroundTransparency = 1,
+		Text = "▾",
+		TextColor3 = THEME.Muted,
+		Font = FONT, TextSize = 12,
+		ZIndex = 7,
+		Parent = btn,
+	})
+
+	local listHeight = math.min(#options, 5) * 30 + 8
+	local list = create("Frame", {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0.5, 18),
+		Size = UDim2.new(0.5, 0, 0, 0),
+		BackgroundColor3 = THEME.Panel,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+		Visible = false,
+		ZIndex = 20,
+		Parent = row,
+	})
+	corner(8, list)
+	stroke(list, 0.85)
+	padding(list, 4)
+	create("UIListLayout", {
+		Padding = UDim.new(0, 2),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = list,
+	})
+
+	-- Long option lists remain usable: the visible list caps at 5 rows and
+	-- scrolls internally, so the overlay never grows past a sane height.
+	local inner = create("ScrollingFrame", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = THEME.Stroke,
+		ScrollBarImageTransparency = 0.6,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ZIndex = 21,
+		Parent = list,
+	})
+	create("UIListLayout", {
+		Padding = UDim.new(0, 2),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = inner,
+	})
+
+	local handle = {}
+	local open = false
+	local function setOpen(v)
+		open = v
+		if open then list.Visible = true end
+		tween(arrow, DROP, { Rotation = open and 180 or 0 })
+		local t = tween(list, DROP, { Size = UDim2.new(0.5, 0, 0, open and listHeight or 0) })
+		if not open then
+			t.Completed:Connect(function()
+				if not open then list.Visible = false end
+			end)
+		end
+	end
+
+	local function choose(opt)
+		current = opt
+		selectedLabel.Text = tostring(opt)
+		setOpen(false)
+		if cfg.Callback then task.spawn(cfg.Callback, opt) end
+	end
+
+	for i, opt in ipairs(options) do
+		local item = create("TextButton", {
+			LayoutOrder = i,
+			Size = UDim2.new(1, 0, 0, 28),
+			BackgroundColor3 = THEME.Secondary,
+			BackgroundTransparency = 1,
+			Text = tostring(opt),
+			TextColor3 = THEME.Muted,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Font = FONT, TextSize = 13,
+			AutoButtonColor = false,
+			ZIndex = 22,
+			Parent = inner,
+		})
+		corner(6, item)
+		padding(item, nil, 10, 6, 0, 0)
+		item.MouseEnter:Connect(function()
+			tween(item, HOVER, { BackgroundTransparency = 0.85, TextColor3 = THEME.Foreground })
+		end)
+		item.MouseLeave:Connect(function()
+			tween(item, HOVER, { BackgroundTransparency = 1, TextColor3 = THEME.Muted })
+		end)
+		item.MouseButton1Click:Connect(function()
+			choose(opt)
+		end)
+	end
+
+	btn.MouseButton1Click:Connect(function()
+		setOpen(not open)
+	end)
+
+	function handle:Set(v)
+		-- Guard against invalid values: only accept options that exist.
+		for _, o in ipairs(options) do
+			if o == v then
+				choose(v)
+				return
+			end
+		end
+		-- Unknown value: leave the current selection untouched.
+	end
+	function handle:Get() return current end
+	return handle
+end
+
+--=====================================================================
+-- CONTROL: KEYBIND (generic; click -> "Press a key..." -> capture)
+--=====================================================================
+function Tab:CreateKeybind(cfg)
+	cfg = cfg or {}
+	local card = self:_ensureCard()
+	local currentKey = cfg.CurrentKeybind or "None"
+
+	local row = create("Frame", {
+		LayoutOrder = self:_cardOrder(card),
+		Size = UDim2.new(1, 0, 0, 32),
+		BackgroundTransparency = 1,
+		Parent = card,
+	})
+	create("TextLabel", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(1, -110, 1, 0),
+		BackgroundTransparency = 1,
+		Text = cfg.Name or "Keybind",
+		TextColor3 = THEME.Foreground,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT, TextSize = 14,
+		Parent = row,
+	})
+	local btn = create("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(100, 28),
+		BackgroundColor3 = THEME.Secondary,
+		Text = tostring(currentKey),
+		TextColor3 = THEME.Foreground,
+		Font = FONT_MONO, TextSize = 12,
+		AutoButtonColor = false,
+		Parent = row,
+	})
+	corner(8, btn)
+	stroke(btn, 0.9)
+	attachInteract(btn, { hover = 1.03, press = 0.96 })
+
+	local handle = {}
+	local listening = false
+	local captureConn
+
+	local function stopListening()
+		listening = false
+		if captureConn then captureConn:Disconnect() captureConn = nil end
+	end
+
+	btn.MouseButton1Click:Connect(function()
+		if listening then return end
+		listening = true
+		btn.Text = "Press a key..."
+		tween(btn, HOVER, { BackgroundColor3 = THEME.Primary })
+		btn.TextColor3 = THEME.PrimaryText
+
+		captureConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+			-- ignore GUI-directed input like the click that opened this
+			if gameProcessed then return end
+
+			if input.KeyCode == Enum.KeyCode.Escape then
+				-- cancel: restore previous key
+				stopListening()
+				btn.Text = tostring(currentKey)
+				tween(btn, HOVER, { BackgroundColor3 = THEME.Secondary })
+				btn.TextColor3 = THEME.Foreground
+				return
+			end
+
+			if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown then
+				currentKey = input.KeyCode.Name
+				stopListening()
+				btn.Text = currentKey
+				tween(btn, HOVER, { BackgroundColor3 = THEME.Secondary })
+				btn.TextColor3 = THEME.Foreground
+				if cfg.Callback then task.spawn(cfg.Callback, input.KeyCode) end
+			end
+		end)
+	end)
+
+	function handle:Set(keyName)
+		-- Accept a KeyCode enum or a plain name string.
+		if typeof(keyName) == "EnumItem" then
+			keyName = keyName.Name
+		end
+		currentKey = keyName
+		btn.Text = tostring(keyName)
+	end
+	function handle:Get() return currentKey end
+	return handle
+end
+
+--=====================================================================
+-- CONTROL: BUTTON  (UIScale press feedback)
+--=====================================================================
+function Tab:CreateButton(cfg)
+	cfg = cfg or {}
+	local card = self:_ensureCard()
+	local destructive = cfg.Destructive and true or false
+
+	local btn = create("TextButton", {
+		LayoutOrder = self:_cardOrder(card),
+		Size = UDim2.new(1, 0, 0, 36),
+		BackgroundColor3 = destructive and THEME.Destructive or THEME.Secondary,
+		BackgroundTransparency = destructive and 0.85 or 0,
+		Text = cfg.Name or "Button",
+		TextColor3 = destructive and THEME.Destructive or THEME.Foreground,
+		Font = FONT_BOLD, TextSize = 13,
+		AutoButtonColor = false,
+		Parent = card,
+	})
+	corner(10, btn)
+	if destructive then stroke(btn, 0.6, THEME.Destructive) end
+	attachInteract(btn, {
+		hover = 1.015,
+		press = 0.97,
+		onHover = function(isIn)
+			if not destructive then
+				tween(btn, HOVER, { BackgroundColor3 = isIn and THEME.Primary or THEME.Secondary })
+				tween(btn, HOVER, { TextColor3 = isIn and THEME.PrimaryText or THEME.Foreground })
+			else
+				tween(btn, HOVER, { BackgroundTransparency = isIn and 0.7 or 0.85 })
+			end
+		end,
+	})
+
+	local handle = {}
+	btn.MouseButton1Click:Connect(function()
+		if cfg.Callback then task.spawn(cfg.Callback) end
+	end)
+	function handle:SetText(t) btn.Text = tostring(t) end
+	function handle:GetText() return btn.Text end
+	return handle
+end
+
+--=====================================================================
+-- CONTROL: INPUT (single-line text box; label above)
+--=====================================================================
+function Tab:CreateInput(cfg)
+	cfg = cfg or {}
+	local card = self:_ensureCard()
+	local value = cfg.CurrentValue or ""
+
+	local row = create("Frame", {
+		LayoutOrder = self:_cardOrder(card),
+		Size = UDim2.new(1, 0, 0, 52),
+		BackgroundTransparency = 1,
+		Parent = card,
+	})
+	create("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 16),
+		BackgroundTransparency = 1,
+		Text = cfg.Name or "Input",
+		TextColor3 = THEME.Foreground,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT, TextSize = 14,
+		Parent = row,
+	})
+
+	local box = create("TextBox", {
+		Position = UDim2.fromOffset(0, 22),
+		Size = UDim2.new(1, 0, 0, 28),
+		BackgroundColor3 = THEME.Secondary,
+		Text = tostring(value),
+		PlaceholderText = cfg.PlaceholderText or "",
+		PlaceholderColor3 = THEME.Muted,
+		TextColor3 = THEME.Foreground,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT, TextSize = 13,
+		ClearTextOnFocus = false,
+		ClipsDescendants = true,
+		Parent = row,
+	})
+	corner(8, box)
+	local boxStroke = stroke(box, 0.9)
+	padding(box, nil, 10, 10, 0, 0)
+
+	box.Focused:Connect(function()
+		tween(boxStroke, HOVER, { Transparency = 0.4, Color = THEME.Primary })
+	end)
+	box.FocusLost:Connect(function()
+		value = box.Text
+		tween(boxStroke, HOVER, { Transparency = 0.9, Color = THEME.Stroke })
+		if cfg.Callback then task.spawn(cfg.Callback, value) end
+	end)
+
+	local handle = {}
+	function handle:Set(v)
+		value = tostring(v)
+		box.Text = value
+		if cfg.Callback then task.spawn(cfg.Callback, value) end
+	end
+	function handle:Get() return box.Text end
+	return handle
+end
+
+--=====================================================================
+-- CONTROL: COLOR PICKER (HSV square + hue bar; pure Roblox instances)
+--=====================================================================
+function Tab:CreateColorPicker(cfg)
+	cfg = cfg or {}
+	local card = self:_ensureCard()
+	local color = cfg.Color or Color3.fromRGB(52, 197, 222)
+	local h, s, v = color:ToHSV()
+
+	local row = create("Frame", {
+		LayoutOrder = self:_cardOrder(card),
+		Size = UDim2.new(1, 0, 0, 32),
+		BackgroundTransparency = 1,
+		ClipsDescendants = false,
+		ZIndex = 5,
+		Parent = card,
+	})
+	create("TextLabel", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(1, -70, 1, 0),
+		BackgroundTransparency = 1,
+		Text = cfg.Name or "Color",
+		TextColor3 = THEME.Foreground,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = FONT, TextSize = 14,
+		ZIndex = 6,
+		Parent = row,
+	})
+
+	local preview = create("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(52, 24),
+		BackgroundColor3 = color,
+		Text = "",
+		AutoButtonColor = false,
+		ZIndex = 6,
+		Parent = row,
+	})
+	corner(6, preview)
+	stroke(preview, 0.6)
+
+	-- Overlay panel (animates open/closed; never displaces siblings).
+	local PANEL_W = 208
+	local SV_W, SV_H = 188, 120
+	local HUE_H = 14
+	local PANEL_H = SV_H + 10 + HUE_H + 20 -- + top/bottom padding (10 each)
+
+	local panel = create("Frame", {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0.5, 20),
+		Size = UDim2.fromOffset(PANEL_W, 0),
+		BackgroundColor3 = THEME.Panel,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+		Visible = false,
+		ZIndex = 20,
+		Parent = row,
+	})
+	corner(10, panel)
+	stroke(panel, 0.85)
+	padding(panel, 10)
+
+	-- Saturation / Value square.
+	local sv = create("Frame", {
+		Position = UDim2.fromOffset(0, 0),
+		Size = UDim2.fromOffset(SV_W, SV_H),
+		BackgroundColor3 = Color3.fromHSV(h, 1, 1),
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+		ZIndex = 21,
+		Parent = panel,
+	})
+	corner(6, sv)
+	-- white gradient (left = white -> right = transparent, revealing hue)
+	local whiteOverlay = create("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+		BorderSizePixel = 0,
+		ZIndex = 22,
+		Parent = sv,
+	})
+	create("UIGradient", {
+		Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0),
+			NumberSequenceKeypoint.new(1, 1),
+		}),
+		Parent = whiteOverlay,
+	})
+	-- black gradient (top = transparent -> bottom = black)
+	local blackOverlay = create("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+		BorderSizePixel = 0,
+		ZIndex = 23,
+		Parent = sv,
+	})
+	create("UIGradient", {
+		Rotation = 90,
+		Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 1),
+			NumberSequenceKeypoint.new(1, 0),
+		}),
+		Parent = blackOverlay,
+	})
+	local svDot = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(s, 0, 1 - v, 0),
+		Size = UDim2.fromOffset(10, 10),
+		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+		BorderSizePixel = 0,
+		ZIndex = 24,
+		Parent = sv,
+	})
+	corner(5, svDot)
+	stroke(svDot, 0.1, Color3.fromRGB(0, 0, 0))
+	-- transparent interaction surface over the square
+	local svBtn = create("TextButton", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+		ZIndex = 25,
+		Parent = sv,
+	})
+
+	-- Hue bar.
+	local hueBar = create("Frame", {
+		Position = UDim2.fromOffset(0, SV_H + 10),
+		Size = UDim2.fromOffset(SV_W, HUE_H),
+		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+		ZIndex = 21,
+		Parent = panel,
+	})
+	corner(5, hueBar)
+	create("UIGradient", {
+		Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0.000, Color3.fromRGB(255, 0, 0)),
+			ColorSequenceKeypoint.new(0.167, Color3.fromRGB(255, 255, 0)),
+			ColorSequenceKeypoint.new(0.333, Color3.fromRGB(0, 255, 0)),
+			ColorSequenceKeypoint.new(0.500, Color3.fromRGB(0, 255, 255)),
+			ColorSequenceKeypoint.new(0.667, Color3.fromRGB(0, 0, 255)),
+			ColorSequenceKeypoint.new(0.833, Color3.fromRGB(255, 0, 255)),
+			ColorSequenceKeypoint.new(1.000, Color3.fromRGB(255, 0, 0)),
+		}),
+		Parent = hueBar,
+	})
+	local hueDot = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(h, 0, 0.5, 0),
+		Size = UDim2.fromOffset(4, HUE_H + 4),
+		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+		BorderSizePixel = 0,
+		ZIndex = 24,
+		Parent = hueBar,
+	})
+	corner(2, hueDot)
+	stroke(hueDot, 0.1, Color3.fromRGB(0, 0, 0))
+	local hueBtn = create("TextButton", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+		ZIndex = 25,
+		Parent = hueBar,
+	})
+
+	local handle = {}
+
+	local function refresh(fireCallback)
+		local col = Color3.fromHSV(h, s, v)
+		preview.BackgroundColor3 = col
+		sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+		svDot.Position = UDim2.new(s, 0, 1 - v, 0)
+		hueDot.Position = UDim2.new(h, 0, 0.5, 0)
+		if fireCallback and cfg.Callback then task.spawn(cfg.Callback, col) end
+	end
+
+	-- Reusable drag capture: fires onMove for the initial press and every
+	-- subsequent move, then cleans up both connections on release so there
+	-- are never leftover input connections.
+	local function bindDrag(surface, onMove)
+		surface.InputBegan:Connect(function(input)
+			if input.UserInputType ~= Enum.UserInputType.MouseButton1
+				and input.UserInputType ~= Enum.UserInputType.Touch then
+				return
+			end
+			onMove(input.Position)
+			local moveConn, endConn
+			moveConn = UserInputService.InputChanged:Connect(function(moveInput)
+				if moveInput.UserInputType == Enum.UserInputType.MouseMovement
+					or moveInput.UserInputType == Enum.UserInputType.Touch then
+					onMove(moveInput.Position)
+				end
+			end)
+			endConn = UserInputService.InputEnded:Connect(function(endInput)
+				if endInput.UserInputType == Enum.UserInputType.MouseButton1
+					or endInput.UserInputType == Enum.UserInputType.Touch then
+					if moveConn then moveConn:Disconnect() moveConn = nil end
+					if endConn then endConn:Disconnect() endConn = nil end
+				end
+			end)
+		end)
+	end
+
+	bindDrag(svBtn, function(pos)
+		local relX = clamp((pos.X - sv.AbsolutePosition.X) / sv.AbsoluteSize.X, 0, 1)
+		local relY = clamp((pos.Y - sv.AbsolutePosition.Y) / sv.AbsoluteSize.Y, 0, 1)
+		s = relX
+		v = 1 - relY
+		refresh(true)
+	end)
+
+	bindDrag(hueBtn, function(pos)
+		local relX = clamp((pos.X - hueBar.AbsolutePosition.X) / hueBar.AbsoluteSize.X, 0, 1)
+		h = relX
+		refresh(true)
+	end)
+
+	local open = false
+	local function setOpen(o)
+		open = o
+		if open then panel.Visible = true end
+		local t = tween(panel, DROP, { Size = UDim2.fromOffset(PANEL_W, open and PANEL_H or 0) })
+		if not open then
+			t.Completed:Connect(function()
+				if not open then panel.Visible = false end
+			end)
+		end
+	end
+
+	preview.MouseButton1Click:Connect(function()
+		setOpen(not open)
+	end)
+
+	function handle:Set(newColor)
+		if typeof(newColor) ~= "Color3" then return end
+		h, s, v = newColor:ToHSV()
+		refresh(true)
+	end
+	function handle:Get() return Color3.fromHSV(h, s, v) end
+	return handle
+end
+
+--=====================================================================
+-- RAYFIELD COMPATIBILITY ADAPTER
+--
+-- Lets existing RATAHUB / Rayfield-style code keep calling
+-- Tab:CreateToggle{...}, :CreateSlider{...}, etc. with minimal changes.
+-- The adapter only forwards config + callbacks into the real UI controls;
+-- gameplay logic stays inside the Callback and never touches the UI.
+-- Implemented independently (no Rayfield source is copied).
+--=====================================================================
+local RATAHUBAdapter = {}
+RATAHUBAdapter.__index = RATAHUBAdapter
+
+function RATAHUBAdapter.wrap(window)
+	return setmetatable({ _window = window }, RATAHUBAdapter)
+end
+
+function RATAHUBAdapter:CreateWindow(_)
+	-- Rayfield returns a window; here the window already exists.
+	return self
+end
+
+function RATAHUBAdapter:CreateTab(name, icon)
+	local tab = self._window:CreateTab({ Name = name, Icon = icon, SubTitle = name })
+	return setmetatable({ _tab = tab }, {
+		__index = {
+			CreateSection = function(_, t)
+				return tab:CreateSection(t)
+			end,
+			CreateDivider = function(_)
+				return tab:CreateDivider()
+			end,
+			CreateParagraph = function(_, c)
+				c = c or {}
+				return tab:CreateParagraph({ Title = c.Title, Content = c.Content })
+			end,
+			CreateLabel = function(_, c)
+				local text = type(c) == "table" and c.Text or c
+				return tab:CreateLabel({ Text = text })
+			end,
+			CreateButton = function(_, c)
+				c = c or {}
+				return tab:CreateButton({
+					Name = c.Name, Callback = c.Callback, Destructive = c.Destructive,
+				})
+			end,
+			CreateToggle = function(_, c)
+				c = c or {}
+				return tab:CreateToggle({
+					Name = c.Name, Description = c.Description,
+					CurrentValue = c.CurrentValue, Callback = c.Callback,
+				})
+			end,
+			CreateSlider = function(_, c)
+				c = c or {}
+				return tab:CreateSlider({
+					Name = c.Name, Range = c.Range, Increment = c.Increment,
+					CurrentValue = c.CurrentValue, Suffix = c.Suffix, Callback = c.Callback,
+				})
+			end,
+			CreateDropdown = function(_, c)
+				c = c or {}
+				return tab:CreateDropdown({
+					Name = c.Name, Options = c.Options,
+					CurrentOption = c.CurrentOption or (c.Options and c.Options[1]),
+					Callback = c.Callback,
+				})
+			end,
+			CreateKeybind = function(_, c)
+				c = c or {}
+				return tab:CreateKeybind({
+					Name = c.Name, CurrentKeybind = c.CurrentKeybind, Callback = c.Callback,
+				})
+			end,
+			CreateInput = function(_, c)
+				c = c or {}
+				return tab:CreateInput({
+					Name = c.Name, PlaceholderText = c.PlaceholderText,
+					CurrentValue = c.CurrentValue, Callback = c.Callback,
+				})
+			end,
+			CreateColorPicker = function(_, c)
+				c = c or {}
+				return tab:CreateColorPicker({
+					Name = c.Name, Color = c.Color, Callback = c.Callback,
+				})
+			end,
+		},
+	})
+end
+
+function RATAHUBAdapter:Notify(cfg)
+	return RATAHUB:Notify(cfg)
+end
+
+--=====================================================================
+-- DEMO — RATAHUB V5 layout: 7 tabs (Main / ESP / Aimlock / Triggerbot /
+-- Extras / Troll / Sounds) built entirely through the API. Every callback
+-- is an empty future connection point; NO gameplay logic runs here.
+--=====================================================================
+local win = RATAHUB:CreateWindow({ Title = "RATAHUB", SubTitle = "V5", Version = "V5" })
+
+-- Placeholder option lists (populated with real players / teams later).
+local WHITELIST_TARGETS = { "Nadie" }
+local IGNORE_TEAMS = { "Ninguno" }
+local SOUND_LIST = {
+	"Skeet / Gamesense",
+	"Neverlose Hit",
+	"CS:GO Hit",
+	"TF2 Critical Hit",
+	"Bubble Pop",
+	"Rust Headshot",
+	"CS:GO Headshot",
+}
+
+do -- 1. MAIN
+	local main = win:CreateTab({ Name = "Main", Icon = "◆", SubTitle = "Movement, player and utility" })
+
+	main:CreateSection("Movement")
+	main:CreateToggle({ Name = "Fly", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateKeybind({ Name = "Fly Keybind", CurrentKeybind = "V",
+		Callback = function(Key)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateSlider({ Name = "Fly Speed", Range = { 50, 600 }, Increment = 5, CurrentValue = 140,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateToggle({ Name = "WalkSpeed", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateKeybind({ Name = "WalkSpeed Keybind", CurrentKeybind = "C",
+		Callback = function(Key)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateSlider({ Name = "WalkSpeed", Range = { 16, 300 }, Increment = 1, CurrentValue = 16,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateToggle({ Name = "JumpPower", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateSlider({ Name = "JumpPower", Range = { 50, 300 }, Increment = 1, CurrentValue = 50,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateToggle({ Name = "Gravity", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateSlider({ Name = "Gravity", Range = { 0, 196.2 }, Increment = 0.1, CurrentValue = 196.2,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateToggle({ Name = "Infinite Jump", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateToggle({ Name = "Noclip", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	main:CreateSection("Player")
+	main:CreateButton({ Name = "Reset Personaje (Desbuguear / Respawn)", Callback = function()
+		-- FUTURE LOGIC HERE
+	end })
+	main:CreateToggle({ Name = "Hitbox Expander", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateSlider({ Name = "Hitbox Size", Range = { 1, 30 }, Increment = 1, CurrentValue = 5,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateToggle({ Name = "Hitbox Whitelist Mode", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateDropdown({ Name = "Seleccionar Objetivo Whitelist", Options = WHITELIST_TARGETS, CurrentOption = "Nadie",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	main:CreateSection("Utility")
+	main:CreateSlider({ Name = "Target Server Players", Range = { 1, 10 }, Increment = 1, CurrentValue = 2,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateButton({ Name = "Unirse a Servidor con esa Cantidad", Callback = function()
+		-- FUTURE LOGIC HERE
+	end })
+	main:CreateToggle({ Name = "Anti-AFK", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	main:CreateButton({ Name = "Rejoin Same Server (Mismo Servidor)", Callback = function()
+		-- FUTURE LOGIC HERE
+	end })
+end
+
+do -- 2. ESP
+	local esp = win:CreateTab({ Name = "ESP", Icon = "◉", SubTitle = "Highlights, names and tracers" })
+
+	esp:CreateSection("Highlight ESP")
+	esp:CreateToggle({ Name = "ESP Highlight", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	esp:CreateSection("Name ESP")
+	esp:CreateToggle({ Name = "ESP Nombres", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	esp:CreateToggle({ Name = "ESP Nombre + Studs + Vida", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	esp:CreateSlider({ Name = "Posicion Offset X (Lados)", Range = { -10, 10 }, Increment = 0.1, CurrentValue = 0,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	esp:CreateSlider({ Name = "Posicion Offset Y (Altura)", Range = { -10, 10 }, Increment = 0.1, CurrentValue = 0,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	esp:CreateSlider({ Name = "Tamaño de Texto ESP", Range = { 8, 32 }, Increment = 1, CurrentValue = 14,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	esp:CreateSection("Tracers")
+	esp:CreateToggle({ Name = "Tracer Whitelist (Rojo)", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	esp:CreateDropdown({ Name = "Tracer Origin", Options = { "Mouse", "Bottom", "Center" }, CurrentOption = "Bottom",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	esp:CreateToggle({ Name = "Team Color Tracer", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	esp:CreateSection("Whitelist")
+	esp:CreateToggle({ Name = "ESP Whitelist Mode", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	esp:CreateDropdown({ Name = "Seleccionar Objetivo Whitelist", Options = WHITELIST_TARGETS, CurrentOption = "Nadie",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	esp:CreateToggle({ Name = "Sincronizar con Aimlock", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	esp:CreateToggle({ Name = "Sincronizar con Triggerbot", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	esp:CreateSection("Visual")
+	esp:CreateDropdown({ Name = "Color Highlight",
+		Options = { "Morado", "Rojo", "Azul", "Verde Neon", "Cyan", "Blanco" }, CurrentOption = "Morado",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	esp:CreateToggle({ Name = "Team Color Highlight", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	esp:CreateToggle({ Name = "Team Color Tracer", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	esp:CreateToggle({ Name = "Rainbow ESP", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	esp:CreateSection("Team Check")
+	esp:CreateDropdown({ Name = "Equipos a Ignorar", Options = IGNORE_TEAMS, CurrentOption = "Ninguno",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	esp:CreateToggle({ Name = "Sincronizar con Aimlock", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	esp:CreateToggle({ Name = "Sincronizar con Triggerbot", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+end
+
+do -- 3. AIMLOCK
+	local aim = win:CreateTab({ Name = "Aimlock", Icon = "⊹", SubTitle = "Target, FOV and whitelist" })
+
+	aim:CreateSection("General")
+	aim:CreateToggle({ Name = "Aimlock", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateKeybind({ Name = "Aimlock Keybind", CurrentKeybind = "RightShift",
+		Callback = function(Key)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateSlider({ Name = "Smoothness", Range = { 0, 100 }, Increment = 1, CurrentValue = 25,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateToggle({ Name = "Prediction Aimlock", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateSlider({ Name = "Prediction Time", Range = { 0, 1 }, Increment = 0.01, CurrentValue = 0.13,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateToggle({ Name = "Team Check (No lockear equipo)", CurrentValue = true,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	aim:CreateSection("Target")
+	aim:CreateDropdown({ Name = "Aim Part", Options = { "Head", "Torso", "Auto" }, CurrentOption = "Head",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateToggle({ Name = "Use Max Distance", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateSlider({ Name = "Max Distance", Range = { 50, 5000 }, Increment = 50, CurrentValue = 1000,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateToggle({ Name = "Use FOV", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateSlider({ Name = "FOV Size", Range = { 10, 500 }, Increment = 5, CurrentValue = 120,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	aim:CreateSection("Visual")
+	aim:CreateToggle({ Name = "Tracer Enemigos (Aimlock)", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateDropdown({ Name = "Tracer Origin", Options = { "Mouse", "Bottom" }, CurrentOption = "Mouse",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	aim:CreateSection("Whitelist")
+	aim:CreateToggle({ Name = "Aimlock Whitelist Mode", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateDropdown({ Name = "Seleccionar Objetivo Whitelist", Options = WHITELIST_TARGETS, CurrentOption = "Nadie",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateToggle({ Name = "Sincronizar con ESP", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateToggle({ Name = "Sincronizar con Triggerbot", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	aim:CreateSection("Team Check")
+	aim:CreateDropdown({ Name = "Equipos a Ignorar", Options = IGNORE_TEAMS, CurrentOption = "Ninguno",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateToggle({ Name = "Sincronizar con ESP", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	aim:CreateToggle({ Name = "Sincronizar con Triggerbot", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+end
+
+do -- 4. TRIGGERBOT
+	local trig = win:CreateTab({ Name = "Triggerbot", Icon = "◎", SubTitle = "Auto-fire checks and whitelist" })
+
+	trig:CreateSection("General")
+	trig:CreateToggle({ Name = "Triggerbot", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	trig:CreateSlider({ Name = "Trigger Delay", Range = { 0, 500 }, Increment = 5, CurrentValue = 50, Suffix = " ms",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	trig:CreateSection("Checks")
+	trig:CreateToggle({ Name = "Team Check (No disparar equipo)", CurrentValue = true,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	trig:CreateToggle({ Name = "Wall Check", CurrentValue = true,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	trig:CreateSection("Whitelist")
+	trig:CreateToggle({ Name = "Triggerbot Whitelist Mode", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	trig:CreateDropdown({ Name = "Seleccionar Objetivo Whitelist", Options = WHITELIST_TARGETS, CurrentOption = "Nadie",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	trig:CreateToggle({ Name = "Sincronizar con ESP", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	trig:CreateToggle({ Name = "Sincronizar con Aimlock", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	trig:CreateSection("Team Check")
+	trig:CreateDropdown({ Name = "Equipos a Ignorar", Options = IGNORE_TEAMS, CurrentOption = "Ninguno",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	trig:CreateToggle({ Name = "Sincronizar con ESP", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	trig:CreateToggle({ Name = "Sincronizar con Aimlock", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+end
+
+do -- 5. EXTRAS
+	local extras = win:CreateTab({ Name = "Extras", Icon = "✦", SubTitle = "Camera, vision, tools, performance" })
+
+	extras:CreateSection("Camera")
+	extras:CreateToggle({ Name = "Unlock Max Camera Distance (Zoom Infinito)", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	extras:CreateToggle({ Name = "FOV Changer", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	extras:CreateSlider({ Name = "FOV", Range = { 70, 120 }, Increment = 1, CurrentValue = 70,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	extras:CreateToggle({ Name = "Freecam", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	extras:CreateSection("Vision")
+	extras:CreateToggle({ Name = "X-Ray", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	extras:CreateSection("Tools")
+	extras:CreateToggle({ Name = "Click TP", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	extras:CreateToggle({ Name = "BTools", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	extras:CreateSection("Performance")
+	extras:CreateToggle({ Name = "FPS Boost", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	extras:CreateToggle({ Name = "Anti-Fling", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+end
+
+do -- 6. TROLL
+	local troll = win:CreateTab({ Name = "Troll", Icon = "☻", SubTitle = "Troll scripts" })
+
+	troll:CreateSection("Scripts")
+	troll:CreateToggle({ Name = "Fling", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	troll:CreateToggle({ Name = "Invisible", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+end
+
+do -- 7. SOUNDS
+	local sounds = win:CreateTab({ Name = "Sounds", Icon = "♪", SubTitle = "Lock and hit sound configuration" })
+
+	sounds:CreateSection("Configuracion de Sonidos")
+	sounds:CreateToggle({ Name = "Lock Sound (Sonido al fijar)", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	sounds:CreateDropdown({ Name = "Sonido para Lock Target", Options = SOUND_LIST, CurrentOption = "Skeet / Gamesense",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	sounds:CreateToggle({ Name = "Hit Sound (Sonido al golpear/disparar)", CurrentValue = false,
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	sounds:CreateDropdown({ Name = "Sonido para Hit / Disparo", Options = SOUND_LIST, CurrentOption = "Neverlose Hit",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+
+	sounds:CreateSection("Probar & Escuchar Sonidos")
+	sounds:CreateDropdown({ Name = "Lista de Sonidos", Options = SOUND_LIST, CurrentOption = "Skeet / Gamesense",
+		Callback = function(Value)
+			-- FUTURE LOGIC HERE
+		end })
+	sounds:CreateButton({ Name = "Reproducir Sonido Seleccionado", Callback = function()
+		-- FUTURE LOGIC HERE
+	end })
+end
+
+-- Expose the framework for external scripts / adapter usage.
+return { RATAHUB = RATAHUB, Window = win, Adapter = RATAHUBAdapter.wrap(win) }
