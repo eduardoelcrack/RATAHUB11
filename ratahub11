@@ -1,5 +1,5 @@
 --[[
-	RATAHUB V5 — Premium Roblox Utility GUI Framework alavergaaaaa
+	RATAHUB V5 — Premium Roblox Utility GUI Framework  RATAAA
 	Pass: Dropdown Visibility & Dynamic Anchor Fix, Full ESP (Purple/Red/Friend Green),
 	      Persistent Aimlock Target Architecture, Whitelist/Team/Friend Synchronized Logic.
 
@@ -2795,7 +2795,7 @@ function Features.RestoreHitbox(plr)
 		hrp.CanCollide = data.CanCollide
 		if data.Material then hrp.Material = data.Material end
 		if data.Color then hrp.Color = data.Color end
-		hrp:SetAttribute("IsExpandedHitbox", nil)
+		pcall(function() hrp:SetAttribute("IsExpandedHitbox", nil) end)
 	end
 	Runtime.Hitbox.origs[plr] = nil
 end
@@ -2821,8 +2821,11 @@ function Features.UpdateHitboxes()
 			if hum and hum.Health > 0 and root then
 				local shouldExpand = isEnabled and Features.IsWhitelisted(p, mode, targetSel)
 				if shouldExpand then
-					if not Runtime.Hitbox.origs[p] then
+					local stored = Runtime.Hitbox.origs[p]
+					if not stored or stored.Char ~= char or stored.Root ~= root then
 						Runtime.Hitbox.origs[p] = {
+							Char = char,
+							Root = root,
 							Size = root.Size,
 							Transparency = root.Transparency,
 							CanCollide = root.CanCollide,
@@ -2837,7 +2840,7 @@ function Features.UpdateHitboxes()
 						root.Material = Enum.Material.Neon
 						root.Color = Color3.fromRGB(175, 25, 255)
 						root.CanCollide = false
-						root:SetAttribute("IsExpandedHitbox", true)
+						pcall(function() root:SetAttribute("IsExpandedHitbox", true) end)
 					end
 				else
 					if Runtime.Hitbox.origs[p] then
@@ -3289,6 +3292,12 @@ function Features.UpdateAimlock()
 
 			local targetPlayer = Runtime.Aimlock.currentTarget
 			local targetName = targetPlayer.Name
+
+			-- Unlock if whitelist mode changed and target is no longer valid
+			if not Features.IsWhitelisted(targetPlayer, Config.Aimlock.WhitelistMode, Config.Aimlock.WhitelistTarget) then
+				Features.UnlockAimlock()
+				return
+			end
 
 			if not targetPlayer.Parent then
 				Features.UnlockAimlock("left", targetName)
@@ -4248,6 +4257,11 @@ do
 		Callback = function(Value)
 			A.WhitelistMode = Value
 			Features.SyncManager.SyncProperty("Aimlock", "WhitelistMode", Value)
+			if Runtime.Aimlock.locked and Runtime.Aimlock.currentTarget then
+				if not Features.IsWhitelisted(Runtime.Aimlock.currentTarget, Value, A.WhitelistTarget) then
+					Features.UnlockAimlock()
+				end
+			end
 		end,
 	})
 	Controls.Aimlock.WhitelistTarget = aim:CreateDropdown({
@@ -4257,6 +4271,11 @@ do
 		Callback = function(Value)
 			A.WhitelistTarget = Value
 			Features.SyncManager.SyncProperty("Aimlock", "WhitelistTarget", Value)
+			if Runtime.Aimlock.locked and Runtime.Aimlock.currentTarget then
+				if not Features.IsWhitelisted(Runtime.Aimlock.currentTarget, A.WhitelistMode, Value) then
+					Features.UnlockAimlock()
+				end
+			end
 		end,
 	})
 	Controls.Aimlock.SyncESP = aim:CreateToggle({
