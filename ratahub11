@@ -1,5 +1,5 @@
 --[[
-	RATAHUB V5 — Premium Roblox Utility GUI Framework
+	RATAHUB V5 — Premium Roblox Utility GUI Framework alaverga
 	Pass: Dropdown Visibility & Dynamic Anchor Fix, Full ESP (Purple/Red/Friend Green),
 	      Persistent Aimlock Target Architecture, Whitelist/Team/Friend Synchronized Logic.
 
@@ -45,6 +45,20 @@ local playerGui = (gethui and gethui()) or (pcall(function() return coreGui end)
 
 -- Global Whitelist Table (Source of truth for global player selections)
 local GlobalWhitelistTable = {}
+
+-- ESP Color Palette
+local COLOR_MAP = {
+	["Morado"]     = Color3.fromRGB(168, 85, 247),
+	["Rojo"]       = Color3.fromRGB(255, 0, 0),
+	["Azul"]       = Color3.fromRGB(59, 130, 246),
+	["Verde Neon"] = Color3.fromRGB(0, 255, 120),
+	["Cyan"]       = Color3.fromRGB(6, 182, 212),
+	["Blanco"]     = Color3.fromRGB(255, 255, 255),
+}
+
+local ESP_PURPLE = COLOR_MAP["Morado"]
+local ESP_RED    = COLOR_MAP["Rojo"]
+local ESP_GREEN  = COLOR_MAP["Verde Neon"]
 
 -- Sound Assets Map
 local SoundAssetIDs = {
@@ -2858,7 +2872,7 @@ function Features.ToggleHitboxLoop(enable)
 	end)
 end
 
-------------------------------------------------------------- DESTROY HUB
+------------------------------------------------------------- DESTROY HUB (Idempotent & Safe)
 function Features.DestroyHub()
 	Features.StopFly()
 	Features.StopWalkSpeed()
@@ -2870,43 +2884,49 @@ function Features.DestroyHub()
 	Features.ToggleHitboxLoop(false)
 	Features.SetTriggerbotActive(false)
 	Config.Triggerbot.Enabled = false
+	Features.SetClickTP(false)
+	Features.SetBTools(false)
+	Features.SetXRay(false)
+	Features.SetFreecam(false)
+	Features.SetFOVChanger(false)
+	Features.SetUnlockMaxDistance(false)
+	Features.SetAntiFling(false)
 
 	if Runtime.Hotkeys.conn then
-		Runtime.Hotkeys.conn:Disconnect()
+		pcall(function() Runtime.Hotkeys.conn:Disconnect() end)
 		Runtime.Hotkeys.conn = nil
 	end
 	if Runtime.ESP.loop then
-		Runtime.ESP.loop:Disconnect()
+		pcall(function() Runtime.ESP.loop:Disconnect() end)
 		Runtime.ESP.loop = nil
 	end
 	if Runtime.ESP.container then
-		Runtime.ESP.container:Destroy()
+		pcall(function() Runtime.ESP.container:Destroy() end)
 		Runtime.ESP.container = nil
 	end
 	for _, entry in pairs(Runtime.ESP.objects) do
-		if entry.Highlight then entry.Highlight:Destroy() end
-		if entry.Billboard then entry.Billboard:Destroy() end
-		if entry.Tracer then entry.Tracer:Remove() end
+		if entry.Highlight then pcall(function() entry.Highlight:Destroy() end) end
+		if entry.Billboard then pcall(function() entry.Billboard:Destroy() end) end
+		if entry.Tracer then pcall(function() entry.Tracer:Remove() end) end
 	end
 	table.clear(Runtime.ESP.objects)
 
 	if Runtime.Aimlock.loop then
-		Runtime.Aimlock.loop:Disconnect()
+		pcall(function() Runtime.Aimlock.loop:Disconnect() end)
 		Runtime.Aimlock.loop = nil
+	end
+	if Runtime.Aimlock.tracer then
+		pcall(function() Runtime.Aimlock.tracer:Remove() end)
+		Runtime.Aimlock.tracer = nil
+	end
+	if Runtime.Aimlock.fovCircle then
+		pcall(function() Runtime.Aimlock.fovCircle:Destroy() end)
+		Runtime.Aimlock.fovCircle = nil
 	end
 	Features.UnlockAimlock()
 
-	if Runtime.Camera.freecamLoop then
-		Runtime.Camera.freecamLoop:Disconnect()
-		Runtime.Camera.freecamLoop = nil
-	end
-	if Runtime.ClickTP.conn then
-		Runtime.ClickTP.conn:Disconnect()
-		Runtime.ClickTP.conn = nil
-	end
-
 	local sGui = playerGui:FindFirstChild("RATAHUB_V5_GUI")
-	if sGui then sGui:Destroy() end
+	if sGui then pcall(function() sGui:Destroy() end) end
 
 	RATAHUB:Notify({ Title = "Destroy Hub", Content = "RATAHUB V5 apagado y limpiado completamente.", Duration = 2 })
 end
@@ -2927,11 +2947,8 @@ function Features.IsWhitelisted(targetPlayer, mode, target)
 	local isSelected = false
 	if type(target) == "table" then
 		isSelected = (target[name] == true)
-	elseif type(target) == "string" then
+	elseif type(target) == "string" and target ~= "" and target ~= "Nadie" then
 		isSelected = (target == name or target == "Todos")
-	end
-	if not isSelected and GlobalWhitelistTable[name] then
-		isSelected = true
 	end
 	if mode == "Only Whitelist" then
 		return isSelected
@@ -2981,15 +2998,15 @@ function Features.GetESPColor(targetPlayer)
 	if espCfg.TeamColorHighlight and targetPlayer.TeamColor then
 		return targetPlayer.TeamColor.Color
 	end
-	local colorMap = {
-		["Morado"] = ESP_PURPLE,
-		["Rojo"] = ESP_RED,
-		["Azul"] = Color3.fromRGB(59, 130, 246),
-		["Verde Neon"] = ESP_GREEN,
-		["Cyan"] = Color3.fromRGB(6, 182, 212),
-		["Blanco"] = Color3.fromRGB(255, 255, 255),
-	}
-	return colorMap[espCfg.HighlightColor] or THEME.Primary
+	return COLOR_MAP[espCfg.HighlightColor] or COLOR_MAP["Morado"]
+end
+
+function Features.GetTracerColor(targetPlayer, baseColor)
+	local espCfg = Config.ESP
+	if espCfg.TeamColorTracers and targetPlayer.TeamColor then
+		return targetPlayer.TeamColor.Color
+	end
+	return baseColor
 end
 
 ------------------------------------------------------------- ESP MODULE
@@ -3036,6 +3053,7 @@ function Features.UpdateESP()
 					end
 
 					local color = Features.GetESPColor(p)
+					local tracerColor = Features.GetTracerColor(p, color)
 
 					-- 1. Highlight
 					if espCfg.Highlight and valid and hum and hum.Health > 0 then
@@ -3114,7 +3132,7 @@ function Features.UpdateESP()
 
 							entry.Tracer.From = originPos
 							entry.Tracer.To = Vector2.new(rootPos.X, rootPos.Y)
-							entry.Tracer.Color = espCfg.TeamColorTracers and (p.TeamColor and p.TeamColor.Color or color) or color
+							entry.Tracer.Color = tracerColor
 							entry.Tracer.Visible = true
 						else
 							entry.Tracer.Visible = false
@@ -3316,7 +3334,7 @@ function Features.UpdateAimlock()
 				if not Runtime.Aimlock.tracer then
 					Runtime.Aimlock.tracer = Drawing.new("Line")
 					Runtime.Aimlock.tracer.Thickness = 1.5
-					Runtime.Aimlock.tracer.Color = THEME.Primary
+					Runtime.Aimlock.tracer.Color = Color3.fromRGB(255, 0, 0)
 					Runtime.Aimlock.tracer.Transparency = 1
 				end
 
@@ -3441,7 +3459,7 @@ function Features.ToggleTriggerbotActive()
 	end
 end
 
-------------------------------------------------------------- EXTRAS: Camera & Vision
+------------------------------------------------------------- EXTRAS: Camera & Vision & Tools
 function Features.SetUnlockMaxDistance(enabled)
 	if enabled then
 		Runtime.Camera.savedMaxZoom = player.CameraMaxZoomDistance
@@ -3581,17 +3599,41 @@ function Features.SetBTools(enabled)
 	if enabled then
 		local backpack = player:FindFirstChildOfClass("Backpack")
 		if backpack then
-			local b1 = Instance.new("HopperBin")
-			b1.BinType = Enum.BinType.Clone
-			b1.Parent = backpack
-
-			local b2 = Instance.new("HopperBin")
-			b2.BinType = Enum.BinType.Hammer
-			b2.Parent = backpack
-
-			local b3 = Instance.new("HopperBin")
-			b3.BinType = Enum.BinType.Grab
-			b3.Parent = backpack
+			if not backpack:FindFirstChild("Clone") then
+				local b1 = Instance.new("HopperBin")
+				b1.Name = "Clone"
+				b1.BinType = Enum.BinType.Clone
+				b1.Parent = backpack
+			end
+			if not backpack:FindFirstChild("Hammer") then
+				local b2 = Instance.new("HopperBin")
+				b2.Name = "Hammer"
+				b2.BinType = Enum.BinType.Hammer
+				b2.Parent = backpack
+			end
+			if not backpack:FindFirstChild("Grab") then
+				local b3 = Instance.new("HopperBin")
+				b3.Name = "Grab"
+				b3.BinType = Enum.BinType.Grab
+				b3.Parent = backpack
+			end
+		end
+	else
+		local backpack = player:FindFirstChildOfClass("Backpack")
+		if backpack then
+			for _, item in ipairs(backpack:GetChildren()) do
+				if item:IsA("HopperBin") and (item.BinType == Enum.BinType.Clone or item.BinType == Enum.BinType.Hammer or item.BinType == Enum.BinType.Grab) then
+					item:Destroy()
+				end
+			end
+		end
+		local char = player.Character
+		if char then
+			for _, item in ipairs(char:GetChildren()) do
+				if item:IsA("HopperBin") and (item.BinType == Enum.BinType.Clone or item.BinType == Enum.BinType.Hammer or item.BinType == Enum.BinType.Grab) then
+					item:Destroy()
+				end
+			end
 		end
 	end
 end
@@ -4597,9 +4639,9 @@ Players.PlayerRemoving:Connect(function(leftPlayer)
 	end
 	if Runtime.ESP.objects[leftPlayer] then
 		local entry = Runtime.ESP.objects[leftPlayer]
-		if entry.Highlight then entry.Highlight:Destroy() end
-		if entry.Billboard then entry.Billboard:Destroy() end
-		if entry.Tracer then entry.Tracer:Remove() end
+		if entry.Highlight then pcall(function() entry.Highlight:Destroy() end) end
+		if entry.Billboard then pcall(function() entry.Billboard:Destroy() end) end
+		if entry.Tracer then pcall(function() entry.Tracer:Remove() end) end
 		Runtime.ESP.objects[leftPlayer] = nil
 	end
 	if Runtime.Hitbox.origs[leftPlayer] then
