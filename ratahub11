@@ -76,19 +76,7 @@
 		screenGui.IgnoreGuiInset = true
 		screenGui.DisplayOrder = 999
 		screenGui.Parent = PlayerGui
-		-- Ocultar la GUI principal mientras el loader está activo
-        -- Destruir el loader primero
-self:Destroy()
-
--- Mostrar la GUI principal después de que el loader terminó
-local mainGui = playerGui:FindFirstChild("RATAHUBGui")
-
-print("[RATAHUB] mainGui encontrado:", mainGui)
-
-if mainGui and mainGui:IsA("ScreenGui") then
-    mainGui.Enabled = true
-end
-
+        
 		local backdrop = Instance.new("Frame")
 		backdrop.Name = "Backdrop"
 		backdrop.Size = UDim2.fromScale(1, 1)
@@ -420,7 +408,6 @@ end
 			TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
 			{ Scale = 1 }
 		)
-self
 		table.insert(Loader._entranceTweens, fadeInBackdrop)
 		table.insert(Loader._entranceTweens, fadeInShadow)
 		table.insert(Loader._entranceTweens, scaleIn)
