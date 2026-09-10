@@ -1,6 +1,6 @@
 	--!strict
 	--[[
-		RATAHUB LOADER V5 (versión inline, sin CanvasGrouphola1)
+		RATAHUB LOADER V5 (versión inline, sin CanvasGrouphola2)
 		------------------------------------------------------------
 		Pega este bloque al inicio de tu script.
 		NO es un ModuleScript, NO usa require(), NO retorna nada:
@@ -632,21 +632,36 @@ self
 				end
 fadeTargets[1].Completed:Wait()
 
-local existingMainGui = PlayerGui:FindFirstChild("RATAHUBGui")
+-- Destruir el loader primero
+self:Destroy()
 
-if existingMainGui and existingMainGui:IsA("ScreenGui") then
-    existingMainGui.Enabled = false
-    hiddenMainGui = existingMainGui
-end
+-- Mostrar la GUI principal después de que el loader terminó
+local mainGui = nil
 
-guiWatchConnection = PlayerGui.ChildAdded:Connect(function(child)
-    if child.Name == "RATAHUBGui" and child:IsA("ScreenGui") then
-        child.Enabled = false
-        hiddenMainGui = child
-    end
+pcall(function()
+    mainGui = PlayerGui:FindFirstChild("RATAHUBGui")
 end)
 
-table.insert(Loader._connections, guiWatchConnection)
+if not mainGui then
+    pcall(function()
+        if gethui then
+            local hui = gethui()
+            if hui then
+                mainGui = hui:FindFirstChild("RATAHUBGui")
+            end
+        end
+    end)
+end
+
+if not mainGui then
+    pcall(function()
+        mainGui = game:GetService("CoreGui"):FindFirstChild("RATAHUBGui")
+    end)
+end
+
+if mainGui and mainGui:IsA("ScreenGui") then
+    mainGui.Enabled = true
+end
 			end)
 		end
 
