@@ -1,6 +1,6 @@
 	--!strict
 	--[[
-		RATAHUB LOADER V5 (versión inline, sin CanvasGrouphola22)
+		RATAHUB LOADER V5 (versión inline, sin CanvasGrouphola222)
 		------------------------------------------------------------
 		Pega este bloque al inicio de tu script.
 		NO es un ModuleScript, NO usa require(), NO retorna nada:
@@ -82,6 +82,8 @@ self:Destroy()
 
 -- Mostrar la GUI principal después de que el loader terminó
 local mainGui = playerGui:FindFirstChild("RATAHUBGui")
+
+print("[RATAHUB] mainGui encontrado:", mainGui)
 
 if mainGui and mainGui:IsA("ScreenGui") then
     mainGui.Enabled = true
