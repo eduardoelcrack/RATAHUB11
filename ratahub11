@@ -3073,8 +3073,8 @@ local overlayGui = create("ScreenGui", {
 
 local watermark = create("Frame", {
     Name = "RATAHUBWatermark",
-    AnchorPoint = Vector2.new(0, 0),
-    Position = UDim2.fromOffset(18, 18),
+AnchorPoint = Vector2.new(1, 0),
+Position = UDim2.new(1, -18, 0, 18),
     Size = UDim2.fromOffset(190, 48),
     BackgroundColor3 = THEME.Panel,
     BackgroundTransparency = 0.08,
@@ -3105,7 +3105,7 @@ local watermarkStats = create("TextLabel", {
     Position = UDim2.fromOffset(11, 25),
     Size = UDim2.new(1, -22, 0, 16),
     BackgroundTransparency = 1,
-    Text = "FPS: --",
+    Text = "FPS: --  •  Ping: -- ms",
     TextColor3 = THEME.Muted,
     TextXAlignment = Enum.TextXAlignment.Left,
     Font = FONT_MONO,
@@ -3172,7 +3172,7 @@ local function HideTargetInfo()
     )
 
     tween.Completed:Connect(function()
-        targetInfo.Visible = false
+        HideTargetInfo()
         targetInfoVisible = false
         targetInfoAnimating = false
     end)
@@ -3256,7 +3256,17 @@ Runtime.HUD.loop = RunService.RenderStepped:Connect(function(dt)
     end
 
 
-watermarkStats.Text = string.format("FPS: %d", hudFPS)
+local ping = 0
+
+pcall(function()
+    ping = math.floor(player:GetNetworkPing() * 1000 + 0.5)
+end)
+
+watermarkStats.Text = string.format(
+    "FPS: %d  •  Ping: %d ms",
+    hudFPS,
+    ping
+)
 
     -- Target Info
     local target = Runtime.Aimlock.currentTarget
@@ -3288,24 +3298,19 @@ return
     local maxHp = math.max(1, humanoid.MaxHealth)
     local hpPercent = math.clamp(hp / maxHp, 0, 1)
 
-    local targetPing = 0
-    pcall(function()
-        targetPing = math.floor(target:GetNetworkPing() * 1000 + 0.5)
-    end)
 
     local teamName = target.Team and target.Team.Name or "Ninguno"
 
     targetName.Text = "TARGET  •  " .. target.DisplayName
 
-    targetStats.Text = string.format(
-        "HP: %d / %d  (%d%%)\nPing: %d ms\nDist: %d studs\nTeam: %s",
-        math.floor(hp + 0.5),
-        math.floor(maxHp + 0.5),
-        math.floor(hpPercent * 100 + 0.5),
-        targetPing,
-        distance,
-        teamName
-    )
+targetStats.Text = string.format(
+    "HP: %d / %d  (%d%%)\nDist: %d studs\nTeam: %s",
+    math.floor(hp + 0.5),
+    math.floor(maxHp + 0.5),
+    math.floor(hpPercent * 100 + 0.5),
+    distance,
+    teamName
+)
 
     hpFill.Size = UDim2.new(hpPercent, 0, 1, 0)
 
