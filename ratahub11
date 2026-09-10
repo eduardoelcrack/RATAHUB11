@@ -948,7 +948,14 @@ local screenGui = create("ScreenGui", {
     Enabled = false,
     Parent = playerGui,
 })
-
+local overlayGui = create("ScreenGui", {
+    Name = "RATAHUBOverlay",
+    ResetOnSpawn = false,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    IgnoreGuiInset = true,
+    DisplayOrder = 20,
+    Parent = playerGui,
+})
 	local notifRoot = create("Frame", {
 		Name = "Notifications",
 		AnchorPoint = Vector2.new(1, 0),
@@ -3035,7 +3042,7 @@ local screenGui = create("ScreenGui", {
 	}
 	function RATAHUB:GetControls() return Controls end
 
-	local Runtime = {
+	local Runtime = { 
 		Fly          = { active = false, bv = nil, bg = nil, loop = nil, animate = nil },
 		WalkSpeed    = { active = false, loop = nil, original = nil },
 		JumpPower    = { loop = nil, original = nil },
@@ -3056,9 +3063,216 @@ local screenGui = create("ScreenGui", {
 		Triggerbot   = { active = false, loop = nil, isShooting = false },
 		Hitbox       = { loop = nil, origs = {} },
 		Hotkeys      = { conn = nil },
+        HUD = { loop = nil },
 	}
 
 	local Features = {}
+    -------------------------------------------------------------
+-- RATAHUB V5 HUD / TARGET INFO
+-------------------------------------------------------------
+
+local watermark = create("Frame", {
+    Name = "RATAHUBWatermark",
+    AnchorPoint = Vector2.new(0, 0),
+    Position = UDim2.fromOffset(18, 18),
+    Size = UDim2.fromOffset(190, 48),
+    BackgroundColor3 = THEME.Panel,
+    BackgroundTransparency = 0.08,
+    BorderSizePixel = 0,
+    ZIndex = 100,
+    Parent = overlayGui,
+})
+
+corner(10, watermark)
+stroke(watermark, 0.72, THEME.Primary, 1)
+
+create("TextLabel", {
+    Name = "Title",
+    Position = UDim2.fromOffset(11, 6),
+    Size = UDim2.new(1, -22, 0, 17),
+    BackgroundTransparency = 1,
+    Text = "RATAHUB V5",
+    TextColor3 = THEME.Foreground,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Font = FONT_BOLD,
+    TextSize = 13,
+    ZIndex = 101,
+    Parent = watermark,
+})
+
+local watermarkStats = create("TextLabel", {
+    Name = "Stats",
+    Position = UDim2.fromOffset(11, 25),
+    Size = UDim2.new(1, -22, 0, 16),
+    BackgroundTransparency = 1,
+    Text = "FPS: --  •  Ping: -- ms",
+    TextColor3 = THEME.Muted,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Font = FONT_MONO,
+    TextSize = 11,
+    ZIndex = 101,
+    Parent = watermark,
+})
+
+local targetInfo = create("Frame", {
+    Name = "TargetInfo",
+    AnchorPoint = Vector2.new(1, 0),
+    Position = UDim2.new(1, -18, 0, 18),
+    Size = UDim2.fromOffset(220, 122),
+    BackgroundColor3 = THEME.Panel,
+    BackgroundTransparency = 0.08,
+    BorderSizePixel = 0,
+    Visible = false,
+    ZIndex = 100,
+    Parent = overlayGui,
+})
+
+corner(10, targetInfo)
+stroke(targetInfo, 0.72, THEME.Primary, 1)
+
+local targetName = create("TextLabel", {
+    Name = "TargetName",
+    Position = UDim2.fromOffset(12, 9),
+    Size = UDim2.new(1, -24, 0, 20),
+    BackgroundTransparency = 1,
+    Text = "TARGET",
+    TextColor3 = THEME.Primary,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Font = FONT_BOLD,
+    TextSize = 14,
+    TextTruncate = Enum.TextTruncate.AtEnd,
+    ZIndex = 101,
+    Parent = targetInfo,
+})
+
+local targetStats = create("TextLabel", {
+    Name = "Stats",
+    Position = UDim2.fromOffset(12, 32),
+    Size = UDim2.new(1, -24, 0, 54),
+    BackgroundTransparency = 1,
+    Text = "",
+    TextColor3 = THEME.Foreground,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top,
+    Font = FONT_MONO,
+    TextSize = 11,
+    ZIndex = 101,
+    Parent = targetInfo,
+})
+
+local hpBackground = create("Frame", {
+    Name = "HealthBackground",
+    Position = UDim2.fromOffset(12, 94),
+    Size = UDim2.new(1, -24, 0, 8),
+    BackgroundColor3 = THEME.Secondary,
+    BorderSizePixel = 0,
+    ZIndex = 101,
+    Parent = targetInfo,
+})
+
+corner(4, hpBackground)
+
+local hpFill = create("Frame", {
+    Name = "HealthFill",
+    Size = UDim2.fromScale(1, 1),
+    BackgroundColor3 = THEME.Primary,
+    BorderSizePixel = 0,
+    ZIndex = 102,
+    Parent = hpBackground,
+})
+
+corner(4, hpFill)
+
+local hudFrameCounter = 0
+local hudLastTime = os.clock()
+local hudFPS = 0
+
+Runtime.HUD = {
+    loop = nil,
+}
+
+Runtime.HUD.loop = RunService.RenderStepped:Connect(function(dt)
+    -- FPS
+    hudFrameCounter += 1
+
+    local now = os.clock()
+    if now - hudLastTime >= 0.5 then
+        hudFPS = math.floor(hudFrameCounter / (now - hudLastTime) + 0.5)
+        hudFrameCounter = 0
+        hudLastTime = now
+    end
+
+    -- Ping local
+    local ping = 0
+    pcall(function()
+        ping = math.floor(player:GetNetworkPing() * 1000 + 0.5)
+    end)
+
+    watermarkStats.Text = string.format(
+        "FPS: %d  •  Ping: %d ms",
+        hudFPS,
+        ping
+    )
+
+    -- Target Info
+    local target = Runtime.Aimlock.currentTarget
+
+    if not Runtime.Aimlock.locked or not target or not target.Parent then
+        targetInfo.Visible = false
+        return
+    end
+
+    local character = target.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+
+    if not humanoid or not root or humanoid.Health <= 0 then
+        targetInfo.Visible = false
+        return
+    end
+
+    local distance = 0
+    local camera = workspace.CurrentCamera
+
+    if camera then
+        distance = math.floor(
+            (camera.CFrame.Position - root.Position).Magnitude + 0.5
+        )
+    end
+
+    local hp = math.max(0, humanoid.Health)
+    local maxHp = math.max(1, humanoid.MaxHealth)
+    local hpPercent = math.clamp(hp / maxHp, 0, 1)
+
+    local targetPing = 0
+    pcall(function()
+        targetPing = math.floor(target:GetNetworkPing() * 1000 + 0.5)
+    end)
+
+    local teamName = target.Team and target.Team.Name or "Ninguno"
+
+    targetName.Text = "TARGET  •  " .. target.DisplayName
+
+    targetStats.Text = string.format(
+        "HP: %d / %d  (%d%%)\nPing: %d ms\nDist: %d studs\nTeam: %s",
+        math.floor(hp + 0.5),
+        math.floor(maxHp + 0.5),
+        math.floor(hpPercent * 100 + 0.5),
+        targetPing,
+        distance,
+        teamName
+    )
+
+    hpFill.Size = UDim2.new(hpPercent, 0, 1, 0)
+
+    if hpPercent <= 0.25 then
+        hpFill.BackgroundColor3 = THEME.Destructive
+    else
+        hpFill.BackgroundColor3 = THEME.Primary
+    end
+
+    targetInfo.Visible = true
+end)
 
 	-- Sound Player
 	function Features.PlaySound(soundName)
@@ -4844,12 +5058,20 @@ local screenGui = create("ScreenGui", {
 	end
 
 	------------------------------------------------------------- Event-driven Hotkeys Listener (Restored from RATAHUBB)
-	function Features.StartHotkeys()
-		if Runtime.Hotkeys.conn then return end
-		Runtime.Hotkeys.conn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-			if UserInputService:GetFocusedTextBox() then return end
+function Features.StartHotkeys()
+    if Runtime.Hotkeys.conn then return end
 
-			local keyName = nil
+    Runtime.Hotkeys.conn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if UserInputService:GetFocusedTextBox() then return end
+
+        if input.UserInputType == Enum.UserInputType.Keyboard
+            and input.KeyCode == Enum.KeyCode.K
+        then
+            screenGui.Enabled = not screenGui.Enabled
+            return
+        end
+
+        local keyName = nil
 			if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown then
 				keyName = input.KeyCode.Name
 			elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
