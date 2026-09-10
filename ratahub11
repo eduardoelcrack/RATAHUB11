@@ -5797,17 +5797,16 @@ end)
 -- Initialize event hotkeys listener
 Features.StartHotkeys()
 
--- Return framework handle
-return {
-	RATAHUB = RATAHUB,
-	Window = win,
-	Adapter = RATAHUBAdapter.wrap(win),
-	Config = Config,
-	Controls = Controls,
-	Features = Features,
-}
-
 Loader:SetProgress(0.9)
 Loader:SetStatus("Preparing...")
+Loader:Finish()
 
-Loader:Finish()   -- <-- se coloca al final, cuando tu inicialización termino
+-- Return framework handle
+return {
+    RATAHUB = RATAHUB,
+    Window = win,
+    Adapter = RATAHUBAdapter.wrap(win),
+    Config = Config,
+    Controls = Controls,
+    Features = Features,
+}
