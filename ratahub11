@@ -51,6 +51,8 @@
 	-- ============================================================
 	local function CreateRATAHUBLoader()
 		local Loader = {}
+		local hiddenMainGui = nil
+        local guiWatchConnection = nil
 
 		-- Estado interno explícito: evita combinaciones inconsistentes
 		-- entre "cargando", "finalizando" y "destruido".
@@ -74,6 +76,22 @@
 		screenGui.IgnoreGuiInset = true
 		screenGui.DisplayOrder = 999
 		screenGui.Parent = PlayerGui
+		-- Ocultar la GUI principal mientras el loader está activo
+local existingMainGui = PlayerGui:FindFirstChild("RATAHUBGui")
+
+if existingMainGui and existingMainGui:IsA("ScreenGui") then
+    existingMainGui.Enabled = false
+    hiddenMainGui = existingMainGui
+end
+
+guiWatchConnection = PlayerGui.ChildAdded:Connect(function(child)
+    if child.Name == "RATAHUBGui" and child:IsA("ScreenGui") then
+        child.Enabled = false
+        hiddenMainGui = child
+    end
+end)
+
+table.insert(Loader._connections, guiWatchConnection)
 
 		local backdrop = Instance.new("Frame")
 		backdrop.Name = "Backdrop"
@@ -618,9 +636,15 @@
 				for _, tween in ipairs(fadeTargets) do
 					tween:Play()
 				end
-				fadeTargets[1].Completed:Wait()
+fadeTargets[1].Completed:Wait()
 
-				self:Destroy()
+-- Destruir el loader primero
+self:Destroy()
+
+-- Mostrar la GUI principal después de que el loader terminó
+if hiddenMainGui and hiddenMainGui.Parent then
+    hiddenMainGui.Enabled = true
+end
 			end)
 		end
 
