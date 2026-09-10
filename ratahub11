@@ -638,13 +638,21 @@ table.insert(Loader._connections, guiWatchConnection)
 				end
 fadeTargets[1].Completed:Wait()
 
--- Destruir el loader primero
-self:Destroy()
+local existingMainGui = PlayerGui:FindFirstChild("RATAHUBGui")
 
--- Mostrar la GUI principal después de que el loader terminó
-if hiddenMainGui and hiddenMainGui.Parent then
-    hiddenMainGui.Enabled = true
+if existingMainGui and existingMainGui:IsA("ScreenGui") then
+    existingMainGui.Enabled = false
+    hiddenMainGui = existingMainGui
 end
+
+guiWatchConnection = PlayerGui.ChildAdded:Connect(function(child)
+    if child.Name == "RATAHUBGui" and child:IsA("ScreenGui") then
+        child.Enabled = false
+        hiddenMainGui = child
+    end
+end)
+
+table.insert(Loader._connections, guiWatchConnection)
 			end)
 		end
 
@@ -923,14 +931,15 @@ end
 	--=====================================================================
 	-- SHARED SCREENGUI + NOTIFICATION LAYER
 	--=====================================================================
-	local screenGui = create("ScreenGui", {
-		Name = "RATAHUBGui",
-		ResetOnSpawn = false,
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-		IgnoreGuiInset = true,
-		DisplayOrder = 10,
-		Parent = playerGui,
-	})
+     local screenGui = create("ScreenGui", {
+    Name = "RATAHUBGui",
+    ResetOnSpawn = false,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    IgnoreGuiInset = true,
+    DisplayOrder = 10,
+    Enabled = false,
+    Parent = playerGui,
+})
 
 	local notifRoot = create("Frame", {
 		Name = "Notifications",
