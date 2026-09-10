@@ -2185,8 +2185,8 @@ local overlayGui = create("ScreenGui", {
 
 		local listHeight = math.min(#options, 5) * 30 + 8
 		local list = create("Frame", {
-			AnchorPoint = Vector2.new(0, 0),
-			Position = UDim2.new(0, 0, 0, 0),
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -18, 0, 18),
 			Size = UDim2.new(0, 0, 0, 0),
 			BackgroundColor3 = THEME.Panel,
 			BorderSizePixel = 0,
@@ -3105,7 +3105,7 @@ local watermarkStats = create("TextLabel", {
     Position = UDim2.fromOffset(11, 25),
     Size = UDim2.new(1, -22, 0, 16),
     BackgroundTransparency = 1,
-    Text = "FPS: --  •  Ping: -- ms",
+    Text = "FPS: --",
     TextColor3 = THEME.Muted,
     TextXAlignment = Enum.TextXAlignment.Left,
     Font = FONT_MONO,
@@ -3126,6 +3126,59 @@ local targetInfo = create("Frame", {
     ZIndex = 100,
     Parent = overlayGui,
 })
+
+local targetInfoVisible = false
+local targetInfoAnimating = false
+
+targetInfo.Position = UDim2.new(1, 238, 0, 18)
+
+local function ShowTargetInfo()
+    if targetInfoVisible or targetInfoAnimating then
+        return
+    end
+
+    targetInfoAnimating = true
+    targetInfo.Visible = true
+
+    local tween = TweenService:Create(
+        targetInfo,
+        TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+        {
+            Position = UDim2.new(1, -18, 0, 18)
+        }
+    )
+
+    tween.Completed:Connect(function()
+        targetInfoVisible = true
+        targetInfoAnimating = false
+    end)
+
+    tween:Play()
+end
+
+local function HideTargetInfo()
+    if not targetInfoVisible or targetInfoAnimating then
+        return
+    end
+
+    targetInfoAnimating = true
+
+    local tween = TweenService:Create(
+        targetInfo,
+        TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.In),
+        {
+            Position = UDim2.new(1, 238, 0, 18)
+        }
+    )
+
+    tween.Completed:Connect(function()
+        targetInfo.Visible = false
+        targetInfoVisible = false
+        targetInfoAnimating = false
+    end)
+
+    tween:Play()
+end
 
 corner(10, targetInfo)
 stroke(targetInfo, 0.72, THEME.Primary, 1)
@@ -3202,24 +3255,15 @@ Runtime.HUD.loop = RunService.RenderStepped:Connect(function(dt)
         hudLastTime = now
     end
 
-    -- Ping local
-    local ping = 0
-    pcall(function()
-        ping = math.floor(player:GetNetworkPing() * 1000 + 0.5)
-    end)
 
-    watermarkStats.Text = string.format(
-        "FPS: %d  •  Ping: %d ms",
-        hudFPS,
-        ping
-    )
+watermarkStats.Text = string.format("FPS: %d", hudFPS)
 
     -- Target Info
     local target = Runtime.Aimlock.currentTarget
 
     if not Runtime.Aimlock.locked or not target or not target.Parent then
-        targetInfo.Visible = false
-        return
+HideTargetInfo()
+return
     end
 
     local character = target.Character
@@ -3271,7 +3315,7 @@ Runtime.HUD.loop = RunService.RenderStepped:Connect(function(dt)
         hpFill.BackgroundColor3 = THEME.Primary
     end
 
-    targetInfo.Visible = true
+    ShowTargetInfo()
 end)
 
 	-- Sound Player
