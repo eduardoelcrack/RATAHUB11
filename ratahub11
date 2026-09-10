@@ -5794,13 +5794,10 @@
 		refreshAllPlayerDropdowns()
 	end)
 
-	-- Initialize event hotkeys listener
-	Features.StartHotkeys()
+-- Initialize event hotkeys listener
+Features.StartHotkeys()
 
-	-- Finalizar carga
-	Loader:SetProgress(1)
-	Loader:SetStatus("Ready!")
-
-	task.wait(0.5)
-
-	Loader:Finish()
+-- Finalizar loader
+Loader:SetProgress(1)
+Loader:SetStatus("Ready!")
+Loader:Finish()
