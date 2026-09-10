@@ -1,5 +1,700 @@
+--!strict
 --[[
-	RATAHUB V5 — Premium Roblox Utility GUI Framework AAAAAAaaa
+	RATAHUB LOADER V5 (versión inline, sin CanvasGroup)
+	------------------------------------------------------------
+	Pega este bloque al inicio de tu script.
+	NO es un ModuleScript, NO usa require(), NO retorna nada:
+	al terminar este bloque tu script sigue ejecutándose normal.
+
+	USO:
+		local Loader = CreateRATAHUBLoader()
+
+		Loader:SetProgress(0.25)
+		Loader:SetStatus("Loading...")
+
+		Loader:SetProgress(0.75)
+		Loader:SetStatus("Preparing...")
+
+		Loader:Finish() -- no bloquea el script
+	------------------------------------------------------------
+]]
+
+local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- ============================================================
+-- CONFIG
+-- ============================================================
+-- Tiempo mínimo que el loader permanece visible desde su creación,
+-- sin contar la animación de salida disparada por Finish().
+local RATAHUB_LOADER_MIN_VISIBLE_TIME = 1.4
+
+-- ============================================================
+-- PALETA DE COLORES (una sola familia tonal, sin grises sueltos)
+-- ============================================================
+local RATAHUB_LOADER_COLORS = {
+	Background = Color3.fromRGB(13, 15, 20),
+	Panel      = Color3.fromRGB(24, 27, 35),
+	Secondary  = Color3.fromRGB(33, 37, 47),
+	Stroke     = Color3.fromRGB(48, 53, 67),
+	TextMain   = Color3.fromRGB(240, 242, 247),
+	TextSub    = Color3.fromRGB(148, 156, 172),
+	Accent     = Color3.fromRGB(64, 168, 255),
+	AccentDim  = Color3.fromRGB(45, 110, 175),
+}
+
+-- ============================================================
+-- FUNCIÓN PRINCIPAL
+-- ============================================================
+local function CreateRATAHUBLoader()
+	local Loader = {}
+
+	-- Estado interno explícito: evita combinaciones inconsistentes
+	-- entre "cargando", "finalizando" y "destruido".
+	Loader._state = "Loading" :: "Loading" | "Finishing" | "Destroyed"
+	Loader._createdAt = os.clock()
+	Loader._statusBase = "Initializing"
+	Loader._connections = {} :: { RBXScriptConnection }
+	Loader._progressTween = nil :: Tween?
+	Loader._glowTween = nil :: Tween?
+	Loader._statusTween = nil :: Tween?
+	Loader._entranceTweens = {} :: { Tween }
+	Loader._ambientTweens = {} :: { Tween }
+	Loader._ambientInstances = {} :: { Instance }
+
+	-- ------------------------------------------------------------
+	-- Construcción de la interfaz
+	-- ------------------------------------------------------------
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "RATAHUB_Loader"
+	screenGui.ResetOnSpawn = false
+	screenGui.IgnoreGuiInset = true
+	screenGui.DisplayOrder = 999
+	screenGui.Parent = PlayerGui
+
+	local backdrop = Instance.new("Frame")
+	backdrop.Name = "Backdrop"
+	backdrop.Size = UDim2.fromScale(1, 1)
+	backdrop.BackgroundColor3 = RATAHUB_LOADER_COLORS.Background
+	backdrop.BackgroundTransparency = 1
+	backdrop.BorderSizePixel = 0
+	backdrop.ZIndex = 1
+	backdrop.Parent = screenGui
+
+	local shadow = Instance.new("Frame")
+	shadow.Name = "Shadow"
+	shadow.AnchorPoint = Vector2.new(0.5, 0.5)
+	shadow.Position = UDim2.new(0.5, 0, 0.5, 4)
+	shadow.Size = UDim2.fromOffset(420, 252)
+	shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	shadow.BackgroundTransparency = 1
+	shadow.BorderSizePixel = 0
+	shadow.ZIndex = 1
+	shadow.Parent = backdrop
+
+	local shadowCorner = Instance.new("UICorner")
+	shadowCorner.CornerRadius = UDim.new(0, 20)
+	shadowCorner.Parent = shadow
+
+	-- Panel principal (Frame normal, NO CanvasGroup)
+	local panel = Instance.new("Frame")
+	panel.Name = "Panel"
+	panel.AnchorPoint = Vector2.new(0.5, 0.5)
+	panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+	panel.Size = UDim2.fromOffset(404, 236)
+	panel.BackgroundColor3 = RATAHUB_LOADER_COLORS.Panel
+	panel.BackgroundTransparency = 0
+	panel.BorderSizePixel = 0
+	panel.ClipsDescendants = false
+	panel.ZIndex = 2
+	panel.Parent = backdrop
+
+	local panelCorner = Instance.new("UICorner")
+	panelCorner.CornerRadius = UDim.new(0, 18)
+	panelCorner.Parent = panel
+
+	local panelStroke = Instance.new("UIStroke")
+	panelStroke.Color = RATAHUB_LOADER_COLORS.Accent
+	panelStroke.Thickness = 1
+	panelStroke.Transparency = 0.72
+	panelStroke.Parent = panel
+
+	local uiScale = Instance.new("UIScale")
+	uiScale.Scale = 0.9
+	uiScale.Parent = panel
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingTop = UDim.new(0, 30)
+	padding.PaddingBottom = UDim.new(0, 30)
+	padding.PaddingLeft = UDim.new(0, 34)
+	padding.PaddingRight = UDim.new(0, 34)
+	padding.Parent = panel
+
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Vertical
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, 16)
+	layout.Parent = panel
+
+	-- ------------------------------------------------------------
+	-- Fila del título: RATAHUB + badge V5
+	-- ------------------------------------------------------------
+	local titleRow = Instance.new("Frame")
+	titleRow.Name = "TitleRow"
+	titleRow.BackgroundTransparency = 1
+	titleRow.Size = UDim2.new(1, 0, 0, 34)
+	titleRow.ZIndex = 3
+	titleRow.LayoutOrder = 1
+	titleRow.Parent = panel
+
+	local titleLayout = Instance.new("UIListLayout")
+	titleLayout.FillDirection = Enum.FillDirection.Horizontal
+	titleLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	titleLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+	titleLayout.Padding = UDim.new(0, 10)
+	titleLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	titleLayout.Parent = titleRow
+
+	local title = Instance.new("TextLabel")
+	title.Name = "Title"
+	title.BackgroundTransparency = 1
+	title.AutomaticSize = Enum.AutomaticSize.X
+	title.Size = UDim2.new(0, 0, 1, 0)
+	title.Font = Enum.Font.GothamBold
+	title.Text = "RATAHUB"
+	title.TextSize = 30
+	title.TextColor3 = RATAHUB_LOADER_COLORS.TextMain
+	title.TextTransparency = 0
+	title.ZIndex = 4
+	title.LayoutOrder = 1
+	title.Parent = titleRow
+
+	local badge = Instance.new("Frame")
+	badge.Name = "VersionBadge"
+	badge.BackgroundColor3 = RATAHUB_LOADER_COLORS.Secondary
+	badge.Size = UDim2.fromOffset(42, 22)
+	badge.ZIndex = 4
+	badge.LayoutOrder = 2
+	badge.Parent = titleRow
+
+	local badgeCorner = Instance.new("UICorner")
+	badgeCorner.CornerRadius = UDim.new(1, 0)
+	badgeCorner.Parent = badge
+
+	local badgeStroke = Instance.new("UIStroke")
+	badgeStroke.Color = RATAHUB_LOADER_COLORS.Accent
+	badgeStroke.Thickness = 1
+	badgeStroke.Transparency = 0.3
+	badgeStroke.Parent = badge
+
+	local badgeText = Instance.new("TextLabel")
+	badgeText.BackgroundTransparency = 1
+	badgeText.Size = UDim2.fromScale(1, 1)
+	badgeText.Font = Enum.Font.GothamBold
+	badgeText.Text = "V5"
+	badgeText.TextSize = 14
+	badgeText.TextColor3 = RATAHUB_LOADER_COLORS.Accent
+	badgeText.TextTransparency = 0
+	badgeText.ZIndex = 5
+	badgeText.Parent = badge
+
+	-- Divisor (estático: el detalle animado vive en el spinner y la barra)
+	local divider = Instance.new("Frame")
+	divider.Name = "Divider"
+	divider.BackgroundColor3 = RATAHUB_LOADER_COLORS.Accent
+	divider.BackgroundTransparency = 0.55
+	divider.BorderSizePixel = 0
+	divider.Size = UDim2.new(1, 0, 0, 1)
+	divider.ZIndex = 3
+	divider.LayoutOrder = 2
+	divider.Parent = panel
+
+	local dividerGradient = Instance.new("UIGradient")
+	dividerGradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.5, 0),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	dividerGradient.Parent = divider
+
+	-- ------------------------------------------------------------
+	-- Fila de estado: spinner + texto (con puntos animados incluidos)
+	-- ------------------------------------------------------------
+	local statusRow = Instance.new("Frame")
+	statusRow.Name = "StatusRow"
+	statusRow.BackgroundTransparency = 1
+	statusRow.Size = UDim2.new(1, 0, 0, 18)
+	statusRow.ZIndex = 3
+	statusRow.LayoutOrder = 3
+	statusRow.Parent = panel
+
+	local statusLayout = Instance.new("UIListLayout")
+	statusLayout.FillDirection = Enum.FillDirection.Horizontal
+	statusLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	statusLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+	statusLayout.Padding = UDim.new(0, 8)
+	statusLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	statusLayout.Parent = statusRow
+
+	-- Spinner: un anillo (UIStroke circular) con un UIGradient que
+	-- deja dos huecos transparentes. Al rotar el gradiente, el hueco
+	-- se desplaza alrededor del anillo y se percibe como un arco
+	-- girando. El efecto se aplica directamente sobre el UIStroke
+	-- del propio "spinner" (son hermanos dentro del mismo Frame).
+	local spinner = Instance.new("Frame")
+	spinner.Name = "Spinner"
+	spinner.BackgroundTransparency = 1
+	spinner.Size = UDim2.fromOffset(14, 14)
+	spinner.ZIndex = 4
+	spinner.LayoutOrder = 1
+	spinner.Parent = statusRow
+
+	local spinnerCorner = Instance.new("UICorner")
+	spinnerCorner.CornerRadius = UDim.new(1, 0)
+	spinnerCorner.Parent = spinner
+
+	local spinnerStroke = Instance.new("UIStroke")
+	spinnerStroke.Thickness = 2
+	spinnerStroke.Color = RATAHUB_LOADER_COLORS.Accent
+	spinnerStroke.Transparency = 0
+	spinnerStroke.Parent = spinner
+
+	local spinnerGradient = Instance.new("UIGradient")
+	spinnerGradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(0.5, 1),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	spinnerGradient.Parent = spinner
+
+	local status = Instance.new("TextLabel")
+	status.Name = "Status"
+	status.BackgroundTransparency = 1
+	status.AutomaticSize = Enum.AutomaticSize.X
+	status.Size = UDim2.new(0, 0, 1, 0)
+	status.Font = Enum.Font.Gotham
+	status.Text = "Initializing"
+	status.TextSize = 14
+	status.TextColor3 = RATAHUB_LOADER_COLORS.TextMain
+	status.TextTransparency = 0.15
+	status.ZIndex = 4
+	status.LayoutOrder = 2
+	status.Parent = statusRow
+
+	-- ------------------------------------------------------------
+	-- Barra de progreso
+	-- ------------------------------------------------------------
+	local barContainer = Instance.new("Frame")
+	barContainer.Name = "BarContainer"
+	barContainer.BackgroundTransparency = 1
+	barContainer.Size = UDim2.new(1, 0, 0, 26)
+	barContainer.ZIndex = 3
+	barContainer.LayoutOrder = 4
+	barContainer.Parent = panel
+
+	local barBg = Instance.new("Frame")
+	barBg.Name = "BarBackground"
+	barBg.BackgroundColor3 = RATAHUB_LOADER_COLORS.Secondary
+	barBg.ClipsDescendants = true
+	barBg.Size = UDim2.new(1, 0, 0, 8)
+	barBg.Position = UDim2.new(0, 0, 0, 0)
+	barBg.BorderSizePixel = 0
+	barBg.ZIndex = 3
+	barBg.Parent = barContainer
+
+	local barBgCorner = Instance.new("UICorner")
+	barBgCorner.CornerRadius = UDim.new(1, 0)
+	barBgCorner.Parent = barBg
+
+	local barFill = Instance.new("Frame")
+	barFill.Name = "BarFill"
+	barFill.BackgroundColor3 = RATAHUB_LOADER_COLORS.Accent
+	barFill.Size = UDim2.new(0, 0, 1, 0)
+	barFill.BorderSizePixel = 0
+	barFill.ZIndex = 5
+	barFill.Parent = barBg
+
+	local barFillCorner = Instance.new("UICorner")
+	barFillCorner.CornerRadius = UDim.new(1, 0)
+	barFillCorner.Parent = barFill
+
+	local barFillGradient = Instance.new("UIGradient")
+	barFillGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, RATAHUB_LOADER_COLORS.AccentDim),
+		ColorSequenceKeypoint.new(1, RATAHUB_LOADER_COLORS.Accent),
+	})
+	barFillGradient.Parent = barFill
+
+	local percentLabel = Instance.new("TextLabel")
+	percentLabel.Name = "Percent"
+	percentLabel.BackgroundTransparency = 1
+	percentLabel.AnchorPoint = Vector2.new(1, 0)
+	percentLabel.Position = UDim2.new(1, 0, 0, 12)
+	percentLabel.Size = UDim2.new(0, 60, 0, 16)
+	percentLabel.Font = Enum.Font.GothamMedium
+	percentLabel.Text = "0%"
+	percentLabel.TextSize = 13
+	percentLabel.TextColor3 = RATAHUB_LOADER_COLORS.TextSub
+	percentLabel.TextTransparency = 0
+	percentLabel.TextXAlignment = Enum.TextXAlignment.Right
+	percentLabel.ZIndex = 4
+	percentLabel.Parent = barContainer
+
+	-- ------------------------------------------------------------
+	-- Porcentaje sincronizado con el tween de la barra.
+	-- Basado en evento (GetPropertyChangedSignal), no en polling.
+	-- ------------------------------------------------------------
+	local percentConnection = barFill:GetPropertyChangedSignal("Size"):Connect(function()
+		local ratio = barFill.Size.X.Scale
+		percentLabel.Text = string.format("%d%%", math.floor(ratio * 100 + 0.5))
+		if ratio >= 1 and percentLabel.TextColor3 ~= RATAHUB_LOADER_COLORS.Accent then
+			TweenService:Create(percentLabel, TweenInfo.new(0.25), { TextColor3 = RATAHUB_LOADER_COLORS.Accent }):Play()
+		end
+	end)
+	table.insert(Loader._connections, percentConnection)
+
+	-- ------------------------------------------------------------
+	-- Único par de animaciones ambientales infinitas: el spinner
+	-- (indica actividad) y los puntos suspensivos del status. Ambas
+	-- son baratas, cancelables y se destruyen en Destroy().
+	-- ------------------------------------------------------------
+	local dotsValue = Instance.new("NumberValue")
+	dotsValue.Value = 0
+	table.insert(Loader._ambientInstances, dotsValue)
+
+	local dotsConnection = dotsValue:GetPropertyChangedSignal("Value"):Connect(function()
+		local count = math.floor(dotsValue.Value) % 4
+		status.Text = Loader._statusBase .. string.rep(".", count)
+	end)
+	table.insert(Loader._connections, dotsConnection)
+
+	local dotsTween = TweenService:Create(
+		dotsValue,
+		TweenInfo.new(1.1, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1, false),
+		{ Value = 4 }
+	)
+	table.insert(Loader._ambientTweens, dotsTween)
+	dotsTween:Play()
+
+	local spinnerTween = TweenService:Create(
+		spinnerGradient,
+		TweenInfo.new(0.85, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1, false),
+		{ Rotation = 360 }
+	)
+	table.insert(Loader._ambientTweens, spinnerTween)
+	spinnerTween:Play()
+
+	-- ------------------------------------------------------------
+	-- Animación de entrada: Fade In + Scale In
+	-- ------------------------------------------------------------
+	local fadeInBackdrop = TweenService:Create(
+		backdrop,
+		TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ BackgroundTransparency = 0.15 }
+	)
+	local fadeInShadow = TweenService:Create(
+		shadow,
+		TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ BackgroundTransparency = 0.8 }
+	)
+	local scaleIn = TweenService:Create(
+		uiScale,
+		TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+		{ Scale = 1 }
+	)
+
+	table.insert(Loader._entranceTweens, fadeInBackdrop)
+	table.insert(Loader._entranceTweens, fadeInShadow)
+	table.insert(Loader._entranceTweens, scaleIn)
+
+	fadeInBackdrop:Play()
+	fadeInShadow:Play()
+	scaleIn:Play()
+
+	-- ------------------------------------------------------------
+	-- API pública
+	-- ------------------------------------------------------------
+	function Loader:SetProgress(value: number)
+		if self._state ~= "Loading" then
+			return
+		end
+		value = math.clamp(value, 0, 1)
+
+		if self._progressTween then
+			self._progressTween:Cancel()
+		end
+
+		-- La duración es proporcional al salto: se nota claramente
+		-- cómo la barra recorre el camino hasta el nuevo valor en
+		-- lugar de saltar de golpe.
+		local currentRatio = barFill.Size.X.Scale
+		local delta = math.abs(value - currentRatio)
+		local duration = math.clamp(delta * 2.8, 0.8, 3.6)
+
+		local tween = TweenService:Create(
+			barFill,
+			TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+			{ Size = UDim2.new(value, 0, 1, 0) }
+		)
+		self._progressTween = tween
+		tween:Play()
+
+		-- Glow del borde del panel: entre más avanza el progreso, el
+		-- borde de acento se vuelve más opaco, más grueso y más
+		-- brillante (se acerca a blanco). Va sincronizado con la
+		-- misma duración que la barra para que se sienta como una
+		-- sola cosa.
+		if self._glowTween then
+			self._glowTween:Cancel()
+		end
+		local glowTransparency = 0.75 - (0.7 * value)
+		local glowThickness = 1 + (1.6 * value)
+		local glowColor = RATAHUB_LOADER_COLORS.Accent:Lerp(Color3.fromRGB(200, 232, 255), value)
+		local glowTween = TweenService:Create(
+			panelStroke,
+			TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+			{ Transparency = glowTransparency, Thickness = glowThickness, Color = glowColor }
+		)
+		self._glowTween = glowTween
+		glowTween:Play()
+	end
+
+	function Loader:SetStatus(text: string)
+		if self._state ~= "Loading" then
+			return
+		end
+
+		if self._statusTween then
+			self._statusTween:Cancel()
+		end
+
+		local fadeOut = TweenService:Create(
+			status,
+			TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{ TextTransparency = 1 }
+		)
+		self._statusTween = fadeOut
+		fadeOut:Play()
+
+		fadeOut.Completed:Once(function()
+			-- Aunque Finish() ya haya entrado en "Finishing", dejamos
+			-- que este fade termine su ciclo (fade-in incluido) para
+			-- que el texto nunca se quede pegado en invisible. Solo
+			-- abortamos si el Loader ya fue destruido del todo.
+			if self._state == "Destroyed" then
+				return
+			end
+			self._statusBase = text
+			status.Text = text
+			local fadeIn = TweenService:Create(
+				status,
+				TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				{ TextTransparency = 0.15 }
+			)
+			self._statusTween = fadeIn
+			fadeIn:Play()
+		end)
+	end
+
+	-- ------------------------------------------------------------
+	-- Finish(): no bloquea el script que lo llama.
+	-- Respeta el tiempo mínimo visible desde la creación y luego
+	-- ejecuta, en aprox. 0.8-1.2s: Ready -> 100% -> Fade Out -> Destroy.
+	-- ------------------------------------------------------------
+	function Loader:Finish()
+		if self._state ~= "Loading" then
+			return
+		end
+		self._state = "Finishing"
+
+		task.spawn(function()
+			local elapsed = os.clock() - self._createdAt
+			local remaining = RATAHUB_LOADER_MIN_VISIBLE_TIME - elapsed
+			if remaining > 0 then
+				task.wait(remaining)
+			end
+
+			-- Si la barra todavía está en movimiento hacia el valor
+			-- que le mandaron por SetProgress, la dejamos terminar su
+			-- propio recorrido en vez de cortarla a medias: cancelarla
+			-- a mitad de camino y arrancar otra tween más corta es lo
+			-- que se sentía como un "impulso" repentino de velocidad.
+			if self._progressTween and self._progressTween.PlaybackState == Enum.PlaybackState.Playing then
+				self._progressTween.Completed:Wait()
+			end
+
+			-- Detiene todo lo ambiental/entrada/estado.
+			for _, tween in ipairs(self._entranceTweens) do
+				pcall(function()
+					tween:Cancel()
+				end)
+			end
+			for _, tween in ipairs(self._ambientTweens) do
+				pcall(function()
+					tween:Cancel()
+				end)
+			end
+			if self._progressTween then
+				self._progressTween:Cancel()
+			end
+			if self._glowTween then
+				self._glowTween:Cancel()
+			end
+			if self._statusTween then
+				self._statusTween:Cancel()
+			end
+
+			-- El texto cambia de ancho al pasar a "Ready" (string más
+			-- corto). Para que ese reacomodo del layout no se note,
+			-- lo hacemos desaparecer, lo cambiamos mientras es
+			-- invisible, y lo regresamos ya en su posición final.
+			local readyFadeOut = TweenService:Create(
+				status,
+				TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				{ TextTransparency = 1 }
+			)
+			self._statusTween = readyFadeOut
+			readyFadeOut:Play()
+			readyFadeOut.Completed:Wait()
+
+			self._statusBase = "Ready"
+			status.Text = "Ready"
+
+			local readyFadeIn = TweenService:Create(
+				status,
+				TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				{ TextTransparency = 0 }
+			)
+			self._statusTween = readyFadeIn
+			readyFadeIn:Play()
+
+			-- El spinner ya cumplió su función: en vez de quedarse
+			-- congelado a medio giro (se ve como un anillo roto),
+			-- se desvanece limpio apenas entramos a "Ready".
+			TweenService:Create(
+				spinnerStroke,
+				TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				{ Transparency = 1 }
+			):Play()
+
+			local completeDelta = math.abs(1 - barFill.Size.X.Scale)
+			local completeDuration = math.clamp(completeDelta * 1.1, 0.2, 0.45)
+			local completeTween = TweenService:Create(
+				barFill,
+				TweenInfo.new(completeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				{ Size = UDim2.new(1, 0, 1, 0) }
+			)
+			completeTween:Play()
+			completeTween.Completed:Wait()
+
+			TweenService:Create(percentLabel, TweenInfo.new(0.2), { TextColor3 = RATAHUB_LOADER_COLORS.Accent }):Play()
+
+			task.wait(0.15)
+
+			-- Fade Out + Scale Out de cada elemento, en paralelo.
+			local fadeDuration = 0.32
+			local fadeTargets: { Tween } = {
+				TweenService:Create(backdrop, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 }),
+				TweenService:Create(shadow, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 }),
+				TweenService:Create(panel, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 }),
+				TweenService:Create(panelStroke, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Transparency = 1 }),
+				TweenService:Create(uiScale, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0.92 }),
+				TweenService:Create(title, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { TextTransparency = 1 }),
+				TweenService:Create(badge, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 }),
+				TweenService:Create(badgeStroke, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Transparency = 1 }),
+				TweenService:Create(badgeText, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { TextTransparency = 1 }),
+				TweenService:Create(divider, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 }),
+				TweenService:Create(status, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { TextTransparency = 1 }),
+				TweenService:Create(spinnerStroke, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Transparency = 1 }),
+				TweenService:Create(barBg, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 }),
+				TweenService:Create(barFill, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 }),
+				TweenService:Create(percentLabel, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { TextTransparency = 1 }),
+			}
+
+			for _, tween in ipairs(fadeTargets) do
+				tween:Play()
+			end
+			fadeTargets[1].Completed:Wait()
+
+			self:Destroy()
+		end)
+	end
+
+	function Loader:Destroy()
+		if self._state == "Destroyed" then
+			return
+		end
+		self._state = "Destroyed"
+
+		if self._progressTween then
+			pcall(function()
+				self._progressTween:Cancel()
+			end)
+		end
+		if self._glowTween then
+			pcall(function()
+				self._glowTween:Cancel()
+			end)
+		end
+		if self._statusTween then
+			pcall(function()
+				self._statusTween:Cancel()
+			end)
+		end
+		for _, tween in ipairs(self._entranceTweens) do
+			pcall(function()
+				tween:Cancel()
+			end)
+		end
+		for _, tween in ipairs(self._ambientTweens) do
+			pcall(function()
+				tween:Cancel()
+			end)
+		end
+		table.clear(self._entranceTweens)
+		table.clear(self._ambientTweens)
+
+		for _, connection in ipairs(self._connections) do
+			if connection.Connected then
+				connection:Disconnect()
+			end
+		end
+		table.clear(self._connections)
+
+		for _, instance in ipairs(self._ambientInstances) do
+			pcall(function()
+				instance:Destroy()
+			end)
+		end
+		table.clear(self._ambientInstances)
+
+		if screenGui.Parent then
+			screenGui:Destroy()
+		end
+	end
+
+	return Loader
+end
+
+-- NOTA: aquí NO hay "return CreateRATAHUBLoader".
+-- La función queda declarada como "local" dentro de tu script
+-- y el resto de tu código continúa ejecutándose normalmente debajo.
+
+local Loader = CreateRATAHUBLoader()   -- <-- justo aquí empieza tu script
+
+-- =========================================
+-- RESTO DE TU SCRIPT EXISTENTE
+-- =========================================
+
+Loader:SetProgress(0.25)
+Loader:SetStatus("Loading...")
+
+--[[
+	RATAHUB V5 — Premium Roblox Utility GUI Framework
 	Pass: Dropdown Visibility & Dynamic Anchor Fix, Full ESP (Purple/Red/Friend Green),
 	      Persistent Aimlock Target Architecture, Whitelist/Team/Friend Synchronized Logic.
 
@@ -1203,6 +1898,11 @@ function Tab:CreateToggle(cfg)
 	function handle:Set(v)
 		state = v and true or false
 		apply(true)
+		if cfg.Callback then task.spawn(cfg.Callback, state) end
+	end
+	function handle:SetSilent(v)
+		state = v and true or false
+		apply(false)
 	end
 	function handle:Get() return state end
 	return handle
@@ -1351,7 +2051,7 @@ function Tab:CreateDropdown(cfg)
 	cfg = cfg or {}
 	local card = self:_ensureCard()
 	local options = cfg.Options or {}
-	local isMulti = (cfg.Name == "Seleccionar Objetivo Whitelist" or cfg.MultiSelect == true)
+	local isMulti = (cfg.Name == "Seleccionar Objetivo Whitelist" or cfg.Name == "Equipos a Ignorar" or cfg.MultipleOptions == true or cfg.MultiSelect == true)
 	local current = cfg.CurrentOption or (isMulti and {} or (options[1] or ""))
 	local selectedMulti = {}
 	if isMulti then
@@ -1630,13 +2330,13 @@ function Tab:CreateDropdown(cfg)
 
 	function handle:SetSilent(v)
 		if isMulti then
-			selectedMulti = {}
+			table.clear(selectedMulti)
 			if type(v) == "table" then
 				for k, val in pairs(v) do
 					if type(k) == "string" and val == true then selectedMulti[k] = true
 					elseif type(val) == "string" then selectedMulti[val] = true end
 				end
-			elseif type(v) == "string" and v ~= "" and v ~= "Nadie" then
+			elseif type(v) == "string" and v ~= "" and v ~= "Nadie" and v ~= "Ninguno" then
 				selectedMulti[v] = true
 			end
 			selectedLabel.Text = getDisplayText()
@@ -2209,6 +2909,7 @@ local Config = {
 		RainbowESP = false,
 		IgnoreTeams = "Ninguno",
 		FriendCheck = false,
+		LockFriends = false,
 	},
 	Aimlock = {
 		Enabled = false,
@@ -2216,7 +2917,7 @@ local Config = {
 		Smoothness = 25,
 		Prediction = false,
 		PredictionTime = 0.13,
-		TeamCheck = true,
+		TeamCheck = false,
 		AimPart = "Head",
 		UseMaxDistance = false,
 		MaxDistance = 1000,
@@ -2229,7 +2930,8 @@ local Config = {
 		SyncESP = false,
 		SyncTriggerbot = false,
 		IgnoreTeams = "Ninguno",
-		FriendCheck = true,
+		FriendCheck = false,
+		LockFriends = false,
 	},
 	Triggerbot = {
 		Enabled = false,
@@ -2330,8 +3032,22 @@ function Features.PlaySound(soundName)
 	end
 end
 
-------------------------------------------------------------- SYNC MANAGER (Single Layer, Anti-Loop)
-local SyncManager = { isSyncing = false }
+------------------------------------------------------------- SYNC MANAGER (Single Layer, Anti-Loop, Backup & Restore)
+local SyncManager = {
+	isSyncing = false,
+	snapshots = {}
+}
+
+local function cloneVal(val)
+	if type(val) == "table" then
+		local copy = {}
+		for k, v in pairs(val) do
+			copy[k] = v
+		end
+		return copy
+	end
+	return val
+end
 
 function SyncManager.SyncProperty(sourceModule, propName, value)
 	if SyncManager.isSyncing then return end
@@ -2350,20 +3066,21 @@ function SyncManager.SyncProperty(sourceModule, propName, value)
 	end
 
 	for _, targetMod in ipairs(targets) do
-		if propName == "WhitelistMode" then
-			Config[targetMod].WhitelistMode = value
-			if Controls[targetMod] and Controls[targetMod].WhitelistMode then
-				Controls[targetMod].WhitelistMode:SetSilent(value)
+		local tCfg = Config[targetMod]
+		if tCfg and tCfg[propName] ~= nil then
+			tCfg[propName] = cloneVal(value)
+			if Controls[targetMod] and Controls[targetMod][propName] and Controls[targetMod][propName].SetSilent then
+				Controls[targetMod][propName]:SetSilent(value)
 			end
-		elseif propName == "WhitelistTarget" then
-			Config[targetMod].WhitelistTarget = value
-			if Controls[targetMod] and Controls[targetMod].WhitelistTarget then
-				Controls[targetMod].WhitelistTarget:SetSilent(value)
-			end
-		elseif propName == "IgnoreTeams" then
-			Config[targetMod].IgnoreTeams = value
-			if Controls[targetMod] and Controls[targetMod].IgnoreTeams then
-				Controls[targetMod].IgnoreTeams:SetSilent(value)
+		end
+
+		if targetMod == "ESP" then
+			Features.UpdateESP()
+		elseif targetMod == "Aimlock" then
+			if Runtime.Aimlock.locked and Runtime.Aimlock.currentTarget then
+				if not Features.IsWhitelisted(Runtime.Aimlock.currentTarget, Config.Aimlock.WhitelistMode, Config.Aimlock.WhitelistTarget) then
+					Features.UnlockAimlock()
+				end
 			end
 		end
 	end
@@ -2372,23 +3089,66 @@ function SyncManager.SyncProperty(sourceModule, propName, value)
 end
 
 function SyncManager.OnSyncToggled(sourceModule, targetModule, enabled)
-	if enabled and not SyncManager.isSyncing then
-		SyncManager.isSyncing = true
-		local sCfg = Config[sourceModule]
-		local tCfg = Config[targetModule]
-		if sCfg and tCfg then
-			tCfg.WhitelistMode = sCfg.WhitelistMode
-			tCfg.WhitelistTarget = sCfg.WhitelistTarget
-			tCfg.IgnoreTeams = sCfg.IgnoreTeams
+	if SyncManager.isSyncing then return end
+	SyncManager.isSyncing = true
 
-			if Controls[targetModule] then
-				if Controls[targetModule].WhitelistMode then Controls[targetModule].WhitelistMode:SetSilent(sCfg.WhitelistMode) end
-				if Controls[targetModule].WhitelistTarget then Controls[targetModule].WhitelistTarget:SetSilent(sCfg.WhitelistTarget) end
-				if Controls[targetModule].IgnoreTeams then Controls[targetModule].IgnoreTeams:SetSilent(sCfg.IgnoreTeams) end
+	local key = sourceModule .. "->" .. targetModule
+	local sCfg = Config[sourceModule]
+	local tCfg = Config[targetModule]
+
+	local propsToSync = { "WhitelistMode", "WhitelistTarget", "IgnoreTeams", "TeamCheck", "FriendCheck" }
+
+	if enabled then
+		-- 1. Take a snapshot of targetModule BEFORE overriding it
+		local snapshot = {}
+		if tCfg then
+			for _, p in ipairs(propsToSync) do
+				if tCfg[p] ~= nil then
+					snapshot[p] = cloneVal(tCfg[p])
+				end
 			end
 		end
-		SyncManager.isSyncing = false
+		SyncManager.snapshots[key] = snapshot
+
+		-- 2. Apply sourceModule settings to targetModule
+		if sCfg and tCfg then
+			for _, p in ipairs(propsToSync) do
+				if sCfg[p] ~= nil and tCfg[p] ~= nil then
+					tCfg[p] = cloneVal(sCfg[p])
+					if Controls[targetModule] and Controls[targetModule][p] and Controls[targetModule][p].SetSilent then
+						Controls[targetModule][p]:SetSilent(sCfg[p])
+					end
+				end
+			end
+		end
+	else
+		-- Restore previous state from snapshot if available
+		local snapshot = SyncManager.snapshots[key]
+		if snapshot and tCfg then
+			for _, p in ipairs(propsToSync) do
+				if snapshot[p] ~= nil then
+					tCfg[p] = cloneVal(snapshot[p])
+					if Controls[targetModule] and Controls[targetModule][p] and Controls[targetModule][p].SetSilent then
+						Controls[targetModule][p]:SetSilent(snapshot[p])
+					end
+				end
+			end
+			SyncManager.snapshots[key] = nil
+		end
 	end
+
+	-- Refresh targetModule visuals / state
+	if targetModule == "ESP" then
+		Features.UpdateESP()
+	elseif targetModule == "Aimlock" then
+		if Runtime.Aimlock.locked and Runtime.Aimlock.currentTarget then
+			if not Features.IsWhitelisted(Runtime.Aimlock.currentTarget, Config.Aimlock.WhitelistMode, Config.Aimlock.WhitelistTarget) then
+				Features.UnlockAimlock()
+			end
+		end
+	end
+
+	SyncManager.isSyncing = false
 end
 
 Features.SyncManager = SyncManager
@@ -2935,24 +3695,148 @@ function Features.DestroyHub()
 end
 
 ------------------------------------------------------------- Dynamic Helpers: Whitelist & Teams
-function Features.IsFriend(targetPlayer)
-	if not targetPlayer then return false end
-	local success, result = pcall(function()
-		return player:IsFriendsWith(targetPlayer.UserId)
+function Features.IsAlive(plr)
+	if not plr or not plr.Character then return false end
+	local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+	return (hum and hum.Health > 0) or false
+end
+
+-- =============================================================================
+-- ULTRA-FAST ZERO-LAG ASYNC FRIENDS CACHE & DYNAMIC IN-GAME STATUS
+-- =============================================================================
+local FriendsCache = {}
+
+local function CheckPlayerIsFriend(p)
+	if not p or p == player then return false end
+	local s1, status = pcall(function() return player:GetFriendStatus(p) end)
+	if s1 and (status == Enum.FriendStatus.Friend or status == Enum.FriendStatus.FriendRequestSent) then
+		return true
+	end
+	local s2, isF = pcall(function() return player:IsFriendsWith(p.UserId) end)
+	if s2 and isF then
+		return true
+	end
+	local s3, isF2 = pcall(function() return p:IsFriendsWith(player.UserId) end)
+	if s3 and isF2 then
+		return true
+	end
+	return false
+end
+
+function Features.RefreshAllFriends()
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player then
+			task.spawn(function()
+				local isF = CheckPlayerIsFriend(p)
+				FriendsCache[p] = isF
+				FriendsCache[p.UserId] = isF
+				FriendsCache[p.Name] = isF
+			end)
+		end
+	end
+end
+
+local function CacheFriendStatus(p)
+	if not p or p == player then return end
+	task.spawn(function()
+		local isF = CheckPlayerIsFriend(p)
+		FriendsCache[p] = isF
+		FriendsCache[p.UserId] = isF
+		FriendsCache[p.Name] = isF
 	end)
-	return success and result or false
+end
+
+for _, p in ipairs(Players:GetPlayers()) do
+	CacheFriendStatus(p)
+end
+
+Players.PlayerAdded:Connect(function(p)
+	CacheFriendStatus(p)
+end)
+
+Players.PlayerRemoving:Connect(function(p)
+	FriendsCache[p] = nil
+	FriendsCache[p.UserId] = nil
+	FriendsCache[p.Name] = nil
+end)
+
+pcall(function()
+	player.FriendStatusChanged:Connect(function(otherPlayer, friendStatus)
+		local isF = (friendStatus == Enum.FriendStatus.Friend or friendStatus == Enum.FriendStatus.FriendRequestSent)
+		FriendsCache[otherPlayer] = isF
+		FriendsCache[otherPlayer.UserId] = isF
+		FriendsCache[otherPlayer.Name] = isF
+	end)
+end)
+
+-- Event-driven friend status tracking (Zero lag, zero background polling)
+pcall(function()
+	player.FriendStatusChanged:Connect(function(otherPlayer, friendStatus)
+		local isF = (friendStatus == Enum.FriendStatus.Friend or friendStatus == Enum.FriendStatus.FriendRequestSent)
+		FriendsCache[otherPlayer] = isF
+		FriendsCache[otherPlayer.UserId] = isF
+		FriendsCache[otherPlayer.Name] = isF
+	end)
+end)
+
+function Features.IsFriend(targetPlayer)
+	if not targetPlayer or targetPlayer == player then return false end
+	if FriendsCache[targetPlayer] ~= nil then
+		return FriendsCache[targetPlayer]
+	end
+	if FriendsCache[targetPlayer.UserId] ~= nil then
+		return FriendsCache[targetPlayer.UserId]
+	end
+	if FriendsCache[targetPlayer.Name] ~= nil then
+		return FriendsCache[targetPlayer.Name]
+	end
+	CacheFriendStatus(targetPlayer)
+	return false
+end
+
+function Features.IsTeamIgnored(targetPlayer, ignoredTeams)
+	if not targetPlayer or not targetPlayer.Team then return false end
+	local teamName = targetPlayer.Team.Name
+	if type(ignoredTeams) == "table" then
+		if ignoredTeams[teamName] == true then return true end
+		for k, v in pairs(ignoredTeams) do
+			if v == teamName or (k == teamName and v == true) then
+				return true
+			end
+		end
+	elseif type(ignoredTeams) == "string" and ignoredTeams ~= "" and ignoredTeams ~= "Ninguno" then
+		return ignoredTeams == teamName
+	end
+	return false
 end
 
 function Features.IsWhitelisted(targetPlayer, mode, target)
 	if not targetPlayer or targetPlayer == player then return false end
-	if mode == "Disabled" then return true end
+	if not mode or mode == "Disabled" then return true end
+
 	local name = targetPlayer.Name
 	local isSelected = false
-	if type(target) == "table" then
-		isSelected = (target[name] == true)
-	elseif type(target) == "string" and target ~= "" and target ~= "Nadie" then
-		isSelected = (target == name or target == "Todos")
+
+	local targetObj = target
+	if (not targetObj or (type(targetObj) == "table" and next(targetObj) == nil)) and GlobalWhitelistTable then
+		targetObj = GlobalWhitelistTable
 	end
+
+	if type(targetObj) == "table" then
+		if targetObj[name] == true then
+			isSelected = true
+		else
+			for k, v in pairs(targetObj) do
+				if v == name or (k == name and v == true) then
+					isSelected = true
+					break
+				end
+			end
+		end
+	elseif type(targetObj) == "string" and targetObj ~= "" and targetObj ~= "Nadie" then
+		isSelected = (targetObj == name or targetObj == "Todos")
+	end
+
 	if mode == "Only Whitelist" then
 		return isSelected
 	elseif mode == "Ignore Whitelist" then
@@ -2963,33 +3847,33 @@ end
 
 function Features.IsSameTeam(p)
 	if not p or p == player then return true end
-	local lpTeam = player.Team
-	local tpTeam = p.Team
-	if lpTeam and tpTeam then
-		return lpTeam == tpTeam
-	end
-	if player.TeamColor and p.TeamColor then
-		return player.TeamColor == p.TeamColor
+	if p.Team and player.Team and p.Team == player.Team then
+		return true
 	end
 	return false
 end
 
 function Features.IsPlayerValidESP(targetPlayer)
-	if targetPlayer == player then return false end
+	if not targetPlayer or targetPlayer == player then return false end
 	local espCfg = Config.ESP
 
-	-- Whitelist Filtering
+	local isFriend = Features.IsFriend(targetPlayer)
+	-- Friends with FriendCheck ON are ALWAYS valid (bypasses team & whitelist filters)
+	if espCfg.FriendCheck and isFriend then
+		return true
+	end
+
+	-- Whitelist Filtering: "Only Whitelist" bypasses Team Filters for the selected player
+	if espCfg.WhitelistMode == "Only Whitelist" then
+		return Features.IsWhitelisted(targetPlayer, "Only Whitelist", espCfg.WhitelistTarget)
+	end
+
 	if not Features.IsWhitelisted(targetPlayer, espCfg.WhitelistMode, espCfg.WhitelistTarget) then
 		return false
 	end
 
-	-- Friend Check
-	if espCfg.FriendCheck and Features.IsFriend(targetPlayer) then
-		return false
-	end
-
 	-- Team Filtering
-	if espCfg.IgnoreTeams ~= "Ninguno" and targetPlayer.Team and targetPlayer.Team.Name == espCfg.IgnoreTeams then
+	if Features.IsTeamIgnored(targetPlayer, espCfg.IgnoreTeams) then
 		return false
 	end
 
@@ -2998,18 +3882,30 @@ end
 
 function Features.GetESPColor(targetPlayer)
 	local espCfg = Config.ESP
-	if espCfg.TeamColorHighlight and targetPlayer.TeamColor then
+	if espCfg.FriendCheck and Features.IsFriend(targetPlayer) then
+		return Color3.fromRGB(0, 255, 120) -- Green for friends
+	end
+	if espCfg.RainbowESP or espCfg.Rainbow then
+		return Color3.fromHSV((tick() % 4) / 4, 1, 1)
+	end
+	if espCfg.TeamColorHighlight and targetPlayer.Team and targetPlayer.TeamColor then
 		return targetPlayer.TeamColor.Color
 	end
 	return COLOR_MAP[espCfg.HighlightColor] or COLOR_MAP["Morado"]
 end
 
-function Features.GetTracerColor(targetPlayer, baseColor)
+function Features.GetTracerColor(targetPlayer)
 	local espCfg = Config.ESP
-	if espCfg.TeamColorTracers and targetPlayer.TeamColor then
+	if espCfg.FriendCheck and Features.IsFriend(targetPlayer) then
+		return Color3.fromRGB(0, 255, 120) -- Green for friends
+	end
+	if espCfg.RainbowESP or espCfg.Rainbow then
+		return Color3.fromHSV((tick() % 4) / 4, 1, 1)
+	end
+	if espCfg.TeamColorTracers and targetPlayer.Team and targetPlayer.TeamColor then
 		return targetPlayer.TeamColor.Color
 	end
-	return baseColor
+	return Color3.fromRGB(255, 0, 0) -- RED is standard for tracers
 end
 
 ------------------------------------------------------------- ESP MODULE
@@ -3056,17 +3952,20 @@ function Features.UpdateESP()
 					end
 
 					local color = Features.GetESPColor(p)
-					local tracerColor = Features.GetTracerColor(p, color)
+					local tracerColor = Features.GetTracerColor(p)
 
 					-- 1. Highlight
 					if espCfg.Highlight and valid and hum and hum.Health > 0 then
 						if not entry.Highlight or entry.Highlight.Parent ~= char then
 							if entry.Highlight then entry.Highlight:Destroy() end
-							entry.Highlight = Instance.new("Highlight")
-							entry.Highlight.Adornee = char
-							entry.Highlight.FillTransparency = 0.5
-							entry.Highlight.OutlineTransparency = 0
-							entry.Highlight.Parent = char
+							local h = Instance.new("Highlight")
+							h.Name = "ESPHighlight"
+							h.Adornee = char
+							h.FillTransparency = 0.5
+							h.OutlineTransparency = 0
+							h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+							h.Parent = char
+							entry.Highlight = h
 						end
 						entry.Highlight.FillColor = color
 						entry.Highlight.OutlineColor = color
@@ -3116,12 +4015,13 @@ function Features.UpdateESP()
 						entry.Billboard.Enabled = false
 					end
 
-					-- 3. Tracers (Drawing API if supported)
+					-- 3. Tracers
 					if espCfg.Tracers and valid and hum and hum.Health > 0 and root and Drawing then
 						if not entry.Tracer then
-							entry.Tracer = Drawing.new("Line")
-							entry.Tracer.Thickness = 1.5
-							entry.Tracer.Transparency = 1
+							local line = Drawing.new("Line")
+							line.Thickness = 1.5
+							line.Transparency = 1
+							entry.Tracer = line
 						end
 
 						local rootPos, onScreen = cam:WorldToViewportPoint(root.Position)
@@ -3156,92 +4056,146 @@ function Features.UpdateESP()
 	end
 end
 
-------------------------------------------------------------- AIMLOCK MODULE
+------------------------------------------------------------- AIMLOCK MODULE (RAYFIELD LOGIC)
+function Features.GetAimPart(char)
+	if not char then return nil end
+	local aimPart = Config.Aimlock.AimPart or "Head"
+
+	if aimPart == "Head" then
+		return char:FindFirstChild("Head") or char:FindFirstChildWhichIsA("BasePart")
+	elseif aimPart == "Torso" then
+		return char:FindFirstChild("UpperTorso")
+			or char:FindFirstChild("Torso")
+			or char:FindFirstChild("HumanoidRootPart")
+			or char:FindFirstChildWhichIsA("BasePart")
+	else
+		for _, name in ipairs({"Head", "UpperTorso", "Torso", "HumanoidRootPart"}) do
+			local p = char:FindFirstChild(name)
+			if p then return p end
+		end
+		return char:FindFirstChildWhichIsA("BasePart")
+	end
+end
+
+local function ClearAimlockHighlight()
+	if Runtime.Aimlock.highlight then
+		pcall(function() Runtime.Aimlock.highlight:Destroy() end)
+		Runtime.Aimlock.highlight = nil
+	end
+end
+
+local function CreateAimlockHighlight(plr)
+	ClearAimlockHighlight()
+	if not plr or not plr.Character then return end
+
+	local h = Instance.new("Highlight")
+	h.Name = "AimlockESP"
+	h.Adornee = plr.Character
+	h.FillColor = Color3.fromRGB(255, 0, 0)
+	h.OutlineColor = Color3.fromRGB(255, 255, 255)
+	h.FillTransparency = 0.5
+	h.OutlineTransparency = 0
+	h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	h.Parent = plr.Character
+	Runtime.Aimlock.highlight = h
+end
+
 function Features.FindBestAimlockTarget()
 	local aimCfg = Config.Aimlock
 	local cam = workspace.CurrentCamera
 	if not cam then return nil end
 
-	local bestTargetPlayer = nil
-	local shortestScreenDist = math.huge
+	local closestPlayer = nil
+	local shortest = math.huge
 	local mousePos = UserInputService:GetMouseLocation()
 
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p ~= player and p.Character then
-			local char = p.Character
-			local hum = char:FindFirstChildOfClass("Humanoid")
-			local root = char:FindFirstChild("HumanoidRootPart")
-			local part = char:FindFirstChild(aimCfg.AimPart == "Auto" and "Head" or aimCfg.AimPart) or root
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= player
+			and Features.IsAlive(plr)
+			and Features.IsWhitelisted(plr, aimCfg.WhitelistMode, aimCfg.WhitelistTarget)
+		then
+			-- Friend Check: never lock friends
+			if aimCfg.FriendCheck and Features.IsFriend(plr) then
+				continue
+			end
 
-			if hum and hum.Health > 0 and part and root then
-				local isValid = true
-
-				-- Friend Check
-				if aimCfg.FriendCheck and Features.IsFriend(p) then
-					isValid = false
+			-- If NOT in "Only Whitelist", apply Team Check and Ignore Teams
+			if aimCfg.WhitelistMode ~= "Only Whitelist" then
+				if aimCfg.TeamCheck and Features.IsSameTeam(plr) then
+					continue
 				end
 
-				-- Whitelist
-				if not Features.IsWhitelisted(p, aimCfg.WhitelistMode, aimCfg.WhitelistTarget) then
-					isValid = false
+				if Features.IsTeamIgnored(plr, aimCfg.IgnoreTeams) then
+					continue
 				end
+			end
 
-				-- Team Check
-				if aimCfg.TeamCheck and Features.IsSameTeam(p) then
-					isValid = false
-				end
-				if aimCfg.IgnoreTeams ~= "Ninguno" and p.Team and p.Team.Name == aimCfg.IgnoreTeams then
-					isValid = false
-				end
+			local char = plr.Character
+			if not char then continue end
 
-				-- Max Distance Filter
-				local worldDist = (cam.CFrame.Position - part.Position).Magnitude
-				if aimCfg.UseMaxDistance and worldDist > aimCfg.MaxDistance then
-					isValid = false
-				end
+			local part = Features.GetAimPart(char)
+			if not part then continue end
 
-				if isValid then
-					local screenPos, onScreen = cam:WorldToViewportPoint(part.Position)
-					if onScreen then
-						local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-						if (not aimCfg.UseFOV or screenDist <= aimCfg.FOVSize) and screenDist < shortestScreenDist then
-							shortestScreenDist = screenDist
-							bestTargetPlayer = p
-						end
-					end
-				end
+			local screenPos, onScreen = cam:WorldToViewportPoint(part.Position)
+			if not onScreen then continue end
+
+			local worldDist = (cam.CFrame.Position - part.Position).Magnitude
+			if aimCfg.UseMaxDistance and worldDist > aimCfg.MaxDistance then
+				continue
+			end
+
+			local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+
+			if aimCfg.UseFOV and dist > aimCfg.FOVSize then
+				continue
+			end
+
+			if dist < shortest then
+				shortest = dist
+				closestPlayer = plr
 			end
 		end
 	end
-	return bestTargetPlayer
+
+	return closestPlayer
 end
 
 function Features.UnlockAimlock(reason, targetName)
 	Runtime.Aimlock.locked = false
 	Runtime.Aimlock.currentTarget = nil
+	ClearAimlockHighlight()
 
 	if Runtime.Aimlock.tracer then
 		Runtime.Aimlock.tracer.Visible = false
 	end
 
 	if reason == "died" and targetName then
-		RATAHUB:Notify({ Title = "Aimlock", Content = targetName .. " se murió", Duration = 1.5 })
+		RATAHUB:Notify({ Title = "☠️", Content = targetName .. " se murio el naco💀", Duration = 2 })
 	elseif reason == "left" and targetName then
 		RATAHUB:Notify({ Title = "Aimlock", Content = targetName .. " se salió/desapareció", Duration = 1.5 })
 	end
 end
 
 function Features.ToggleAimlockLock()
-	if not Config.Aimlock.Enabled then return end
+	-- If master toggle is OFF, auto-enable module on keybind press
+	if not Config.Aimlock.Enabled then
+		Config.Aimlock.Enabled = true
+		if Controls.Aimlock and Controls.Aimlock.Toggle then
+			Controls.Aimlock.Toggle:SetSilent(true)
+		end
+		Features.UpdateAimlock()
+	end
 
 	if Runtime.Aimlock.locked then
 		Features.UnlockAimlock()
-		RATAHUB:Notify({ Title = "Aimlock", Content = "Desbloqueado", Duration = 1.2 })
+		RATAHUB:Notify({ Title = "Aimlock", Content = "Desactivado", Duration = 1.2 })
 	else
 		local candidate = Features.FindBestAimlockTarget()
 		if candidate then
 			Runtime.Aimlock.currentTarget = candidate
 			Runtime.Aimlock.locked = true
+			CreateAimlockHighlight(candidate)
+
 			if Config.Sounds.LockSound and Config.Sounds.LockTargetSound then
 				Features.PlaySound(Config.Sounds.LockTargetSound)
 			end
@@ -3260,11 +4214,13 @@ function Features.UpdateAimlock()
 			Runtime.Aimlock.loop = nil
 		end
 		Features.UnlockAimlock()
+		if Runtime.Aimlock.fovCircle then Runtime.Aimlock.fovCircle.Visible = false end
 		return
 	end
 
 	if not Runtime.Aimlock.loop then
 		Runtime.Aimlock.loop = RunService.RenderStepped:Connect(function()
+			-- FOV Circle
 			if Config.Aimlock.Enabled and Config.Aimlock.UseFOV then
 				if not Runtime.Aimlock.fovCircle then
 					Runtime.Aimlock.fovCircle = create("Frame", {
@@ -3293,14 +4249,22 @@ function Features.UpdateAimlock()
 			local targetPlayer = Runtime.Aimlock.currentTarget
 			local targetName = targetPlayer.Name
 
-			-- Unlock if whitelist mode changed and target is no longer valid
-			if not Features.IsWhitelisted(targetPlayer, Config.Aimlock.WhitelistMode, Config.Aimlock.WhitelistTarget) then
-				Features.UnlockAimlock()
+			-- Check if target is still in game
+			if not targetPlayer.Parent then
+				Features.UnlockAimlock("left", targetName)
 				return
 			end
 
-			if not targetPlayer.Parent then
-				Features.UnlockAimlock("left", targetName)
+			-- Check if target is still alive
+			if not Features.IsAlive(targetPlayer) then
+				Features.PlaySound("CS:GO Headshot")
+				Features.UnlockAimlock("died", targetName)
+				return
+			end
+
+			-- Check whitelist validity
+			if not Features.IsWhitelisted(targetPlayer, Config.Aimlock.WhitelistMode, Config.Aimlock.WhitelistTarget) then
+				Features.UnlockAimlock()
 				return
 			end
 
@@ -3310,15 +4274,8 @@ function Features.UpdateAimlock()
 				return
 			end
 
-			local hum = char:FindFirstChildOfClass("Humanoid")
+			local part = Features.GetAimPart(char)
 			local root = char:FindFirstChild("HumanoidRootPart")
-			local part = char:FindFirstChild(Config.Aimlock.AimPart == "Auto" and "Head" or Config.Aimlock.AimPart) or root
-
-			if not hum or hum.Health <= 0 then
-				Features.UnlockAimlock("died", targetName)
-				return
-			end
-
 			if not part then
 				Features.UnlockAimlock("left", targetName)
 				return
@@ -3327,54 +4284,55 @@ function Features.UpdateAimlock()
 			local cam = workspace.CurrentCamera
 			if not cam then return end
 
+			local screenPos, onScreen = cam:WorldToViewportPoint(part.Position)
+			local worldDist = (part.Position - cam.CFrame.Position).Magnitude
+
+			if not onScreen or (Config.Aimlock.UseMaxDistance and worldDist > Config.Aimlock.MaxDistance) then
+				Features.UnlockAimlock()
+				RATAHUB:Notify({ Title = "Aimlock", Content = "Objetivo fuera de rango", Duration = 1.5 })
+				return
+			end
+
 			-- Prediction
 			local targetPos = part.Position
 			if Config.Aimlock.Prediction and root then
-				local vel = root.AssemblyLinearVelocity
+				local vel = root.AssemblyLinearVelocity or Vector3.zero
 				targetPos = targetPos + (vel * Config.Aimlock.PredictionTime)
 			end
 
-			local targetCF = CFrame.new(cam.CFrame.Position, targetPos)
-			local smooth = math.clamp(1 - (Config.Aimlock.Smoothness / 100), 0.05, 1)
-			cam.CFrame = cam.CFrame:Lerp(targetCF, smooth)
-
-			-- Enemy Tracer
-			if Config.Aimlock.EnemyTracers and Drawing then
-				if not Runtime.Aimlock.tracer then
-					Runtime.Aimlock.tracer = Drawing.new("Line")
-					Runtime.Aimlock.tracer.Thickness = 1.5
-					Runtime.Aimlock.tracer.Color = Color3.fromRGB(255, 0, 0)
-					Runtime.Aimlock.tracer.Transparency = 1
-				end
-
-				local screenPos, onScreen = cam:WorldToViewportPoint(part.Position)
-				if onScreen then
-					local originPos = UserInputService:GetMouseLocation()
-					if Config.Aimlock.TracerOrigin == "Center" then
-						originPos = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
-					elseif Config.Aimlock.TracerOrigin == "Bottom" then
-						originPos = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
-					end
-
-					Runtime.Aimlock.tracer.From = originPos
-					Runtime.Aimlock.tracer.To = Vector2.new(screenPos.X, screenPos.Y)
-					Runtime.Aimlock.tracer.Visible = true
+			-- Camera Lerp (Rayfield logic)
+			local targetCF = CFrame.lookAt(cam.CFrame.Position, targetPos)
+			local smoothVal = Config.Aimlock.Smoothness
+			if type(smoothVal) == "number" then
+				if smoothVal > 1 then
+					smoothVal = math.clamp(smoothVal / 100, 0.01, 1)
 				else
-					Runtime.Aimlock.tracer.Visible = false
+					smoothVal = math.clamp(smoothVal, 0.01, 1)
 				end
-			elseif Runtime.Aimlock.tracer then
+			else
+				smoothVal = 1
+			end
+			cam.CFrame = cam.CFrame:Lerp(targetCF, smoothVal)
+
+			-- Maintain highlight
+			if Runtime.Aimlock.highlight and Runtime.Aimlock.highlight.Adornee ~= char then
+				CreateAimlockHighlight(targetPlayer)
+			end
+
+			if Runtime.Aimlock.tracer then
 				Runtime.Aimlock.tracer.Visible = false
 			end
 		end)
 	end
 end
 
-------------------------------------------------------------- TRIGGERBOT MODULE
+--------------------------------------------------------------- TRIGGERBOT MODULE (LAG-FREE OPTIMIZED)
+local TriggerRayParams = RaycastParams.new()
+TriggerRayParams.FilterType = Enum.RaycastFilterType.Exclude
+
 function Features.SetTriggerbotMaster(enabled)
 	Config.Triggerbot.Enabled = enabled
-	if not enabled then
-		Features.SetTriggerbotActive(false)
-	end
+	Features.SetTriggerbotActive(enabled)
 end
 
 function Features.SetTriggerbotActive(active)
@@ -3384,70 +4342,95 @@ function Features.SetTriggerbotActive(active)
 
 	if active then
 		if Runtime.Triggerbot.loop then return end
+		local isShooting = false
+
 		Runtime.Triggerbot.loop = RunService.RenderStepped:Connect(function()
 			if not Config.Triggerbot.Enabled or not Runtime.Triggerbot.active then
 				Features.SetTriggerbotActive(false)
 				return
 			end
-			if Runtime.Triggerbot.isShooting then return end
+			if isShooting then return end
 
-			local cam = workspace.CurrentCamera
-			if not cam then return end
+			local mouse = player:GetMouse()
+			local target = mouse and mouse.Target
+			if not target or not target.Parent then return end
 
-			local mousePos = UserInputService:GetMouseLocation()
-			local mouseRay = cam:ViewportPointToRay(mousePos.X, mousePos.Y)
-
-			local raycastParams = RaycastParams.new()
-			raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-			local ignoreList = { player.Character }
-			if Runtime.ESP and Runtime.ESP.container then
-				table.insert(ignoreList, Runtime.ESP.container)
+			local model = target.Parent
+			if not model:FindFirstChildOfClass("Humanoid") and model.Parent then
+				model = model.Parent
 			end
-			raycastParams.FilterDescendantsInstances = ignoreList
 
-			local result = workspace:Raycast(mouseRay.Origin, mouseRay.Direction * 1000, raycastParams)
-			if result and result.Instance then
-				local hitPart = result.Instance
-				local targetChar = hitPart:FindFirstAncestorOfClass("Model")
-				if targetChar then
-					local targetPlayer = Players:GetPlayerFromCharacter(targetChar)
-					if targetPlayer and targetPlayer ~= player then
-						local hum = targetChar:FindFirstChildOfClass("Humanoid")
-						if hum and hum.Health > 0 then
-							local isValid = true
-							if Config.Triggerbot.TeamCheck and Features.IsSameTeam(targetPlayer) then
-								isValid = false
-							end
-							if Config.Triggerbot.IgnoreTeams ~= "Ninguno" and targetPlayer.Team and targetPlayer.Team.Name == Config.Triggerbot.IgnoreTeams then
-								isValid = false
-							end
-							if not Features.IsWhitelisted(targetPlayer, Config.Triggerbot.WhitelistMode, Config.Triggerbot.WhitelistTarget) then
-								isValid = false
-							end
+			local hum = model:FindFirstChildOfClass("Humanoid")
+			if not hum or hum.Health <= 0 or model.Name == player.Name then return end
 
-							if isValid then
-								Runtime.Triggerbot.isShooting = true
-								task.spawn(function()
-									if Config.Sounds.HitSound and Config.Sounds.HitShootSound then
-										Features.PlaySound(Config.Sounds.HitShootSound)
-									end
-									if mouse1click then
-										pcall(mouse1click)
-									elseif VirtualUser then
-										pcall(function()
-											VirtualUser:CaptureController()
-											VirtualUser:ClickButton1(Vector2.new(mousePos.X, mousePos.Y))
-										end)
-									end
-									local delaySec = (Config.Triggerbot.Delay or 50) / 1000
-									task.wait(delaySec)
-									Runtime.Triggerbot.isShooting = false
-								end)
+			local targetPlr = Players:GetPlayerFromCharacter(model)
+			if not targetPlr or targetPlr == player then return end
+
+			-- Whitelist Check
+			if not Features.IsWhitelisted(targetPlr, Config.Triggerbot.WhitelistMode, Config.Triggerbot.WhitelistTarget) then
+				return
+			end
+
+			-- Friend Check: never shoot friends
+			if Config.Triggerbot.FriendCheck and Features.IsFriend(targetPlr) then
+				return
+			end
+
+			-- Team Check & Ignore Teams (bypassed if in "Only Whitelist")
+			if Config.Triggerbot.WhitelistMode ~= "Only Whitelist" then
+				if Config.Triggerbot.TeamCheck and Features.IsSameTeam(targetPlr) then
+					return
+				end
+
+				if Features.IsTeamIgnored(targetPlr, Config.Triggerbot.IgnoreTeams) then
+					return
+				end
+			end
+
+			-- Wall Check
+			if Config.Triggerbot.WallCheck then
+				local char = player.Character
+				if char then
+					TriggerRayParams.FilterDescendantsInstances = { char }
+					local cam = workspace.CurrentCamera
+					if cam then
+						local origin = cam.CFrame.Position
+						local dir = (mouse.Hit.Position - origin).Unit * 1500
+						local ray = workspace:Raycast(origin, dir, TriggerRayParams)
+						if ray and not ray.Instance:IsDescendantOf(model) then
+							if ray.Instance.Transparency < 1 and ray.Instance.CanCollide then
+								return
 							end
 						end
 					end
 				end
 			end
+
+			isShooting = true
+			task.spawn(function()
+				if Config.Sounds.HitSound and Config.Sounds.HitShootSound then
+					Features.PlaySound(Config.Sounds.HitShootSound)
+				end
+
+				if mouse1click then
+					pcall(mouse1click)
+				elseif mouse1press and mouse1release then
+					pcall(mouse1press)
+					task.wait(0.01)
+					pcall(mouse1release)
+				elseif VirtualUser then
+					pcall(function()
+						VirtualUser:Button1Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+						task.wait(0.01)
+						VirtualUser:Button1Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+					end)
+				end
+
+				local delayMs = Config.Triggerbot.Delay or 0
+				local delaySec = math.max(delayMs / 1000, 0.05)
+				task.wait(delaySec)
+				isShooting = false
+			end)
 		end)
 	else
 		if Runtime.Triggerbot.loop then
@@ -3459,7 +4442,12 @@ function Features.SetTriggerbotActive(active)
 end
 
 function Features.ToggleTriggerbotActive()
-	if not Config.Triggerbot.Enabled then return end
+	if not Config.Triggerbot.Enabled then
+		Config.Triggerbot.Enabled = true
+		if Controls.Triggerbot and Controls.Triggerbot.Enabled then
+			Controls.Triggerbot.Enabled:SetSilent(true)
+		end
+	end
 	Features.SetTriggerbotActive(not Runtime.Triggerbot.active)
 	if Runtime.Triggerbot.active then
 		RATAHUB:Notify({ Title = "Triggerbot", Content = "Activado", Duration = 1.2 })
@@ -3556,7 +4544,9 @@ function Features.SetFreecam(enabled)
 		table.clear(Runtime.Camera.keys)
 
 		cam.CameraType = Runtime.Camera.savedType or Enum.CameraType.Custom
-		cam.CameraSubject = Runtime.Camera.savedSubject or (player.Character and player.Character:FindFirstChildOfClass("Humanoid"))
+		if player.Character and player.Character:FindFirstChildOfClass("Humanoid") then
+			cam.CameraSubject = player.Character:FindFirstChildOfClass("Humanoid")
+		end
 		if root and Runtime.Camera.wasAnchored ~= nil then
 			root.Anchored = Runtime.Camera.wasAnchored
 		end
@@ -3567,10 +4557,12 @@ function Features.SetXRay(enabled)
 	if enabled then
 		for _, part in ipairs(workspace:GetDescendants()) do
 			if part:IsA("BasePart") and not part:IsDescendantOf(player.Character) and not part.Parent:FindFirstChildOfClass("Humanoid") then
-				if not Runtime.XRay.parts[part] then
+				if Runtime.XRay.parts[part] == nil then
 					Runtime.XRay.parts[part] = part.Transparency
 				end
-				part.Transparency = 0.65
+				if part.Transparency < 0.5 then
+					part.Transparency = 0.5
+				end
 			end
 		end
 	else
@@ -3583,67 +4575,192 @@ function Features.SetXRay(enabled)
 	end
 end
 
-function Features.SetClickTP(enabled)
-	if enabled then
-		if not Runtime.ClickTP.conn then
-			Runtime.ClickTP.conn = UserInputService.InputBegan:Connect(function(input, gp)
-				if gp then return end
-				if input.UserInputType == Enum.UserInputType.MouseButton1 and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
-					local mouse = player:GetMouse()
-					if mouse and mouse.Hit and getRoot() then
-						getRoot().CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0))
+local function GiveClickTPTool()
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	local char = player.Character
+	if not backpack or not char then return end
+	if not backpack:FindFirstChild("Click TP") and not char:FindFirstChild("Click TP") then
+		local tool = Instance.new("Tool")
+		tool.RequiresHandle = false
+		tool.Name = "Click TP"
+		tool.ToolTip = "Haz click en cualquier lado para teletransportarte"
+
+		tool.Activated:Connect(function()
+			local mouse = player:GetMouse()
+			if not mouse then return end
+			local params = RaycastParams.new()
+			params.FilterType = Enum.RaycastFilterType.Exclude
+			params.FilterDescendantsInstances = { player.Character }
+
+			local unitRay = mouse.UnitRay
+			local rayResult = workspace:Raycast(unitRay.Origin, unitRay.Direction * 2000, params)
+			local targetPos = rayResult and rayResult.Position or (mouse.Hit and mouse.Hit.Position)
+
+			if targetPos and player.Character then
+				local root = player.Character:FindFirstChild("HumanoidRootPart")
+				if root then
+					player.Character:PivotTo(CFrame.new(targetPos + Vector3.new(0, 3, 0)))
+				end
+			end
+		end)
+
+		tool.Parent = backpack
+	end
+end
+
+local function RemoveClickTPTool()
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if backpack and backpack:FindFirstChild("Click TP") then
+		pcall(function() backpack["Click TP"]:Destroy() end)
+	end
+	local char = player.Character
+	if char and char:FindFirstChild("Click TP") then
+		pcall(function() char["Click TP"]:Destroy() end)
+	end
+end
+
+-- =============================================================================
+-- BTOOLS MAP & DELETED INSTANCES RESTORER (CLONE-BASED 100% RELIABLE)
+-- =============================================================================
+local DeletedPartsCache = {}
+
+local function GiveBToolsTool()
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	local char = player.Character
+	if not backpack or not char then return end
+	if not backpack:FindFirstChild("BTools") and not char:FindFirstChild("BTools") then
+		local tool = Instance.new("Tool")
+		tool.RequiresHandle = false
+		tool.Name = "BTools"
+		tool.ToolTip = "Click en cualquier pared u objeto para borrarlo (Client-side)"
+
+		tool.Activated:Connect(function()
+			local mouse = player:GetMouse()
+			local target = mouse and mouse.Target
+			if target and target:IsA("BasePart") and not target:IsDescendantOf(player.Character) then
+				local isPlayer = false
+				for _, p in ipairs(Players:GetPlayers()) do
+					if p.Character and target:IsDescendantOf(p.Character) then
+						isPlayer = true
+						break
 					end
+				end
+
+				if not isPlayer and target.Parent then
+					pcall(function() target.Archivable = true end)
+					local success, clone = pcall(function() return target:Clone() end)
+					if success and clone then
+						pcall(function() clone.Archivable = true end)
+						table.insert(DeletedPartsCache, {
+							Clone = clone,
+							OriginalParent = target.Parent,
+							CFrame = target.CFrame
+						})
+						if #DeletedPartsCache > 2000 then
+							table.remove(DeletedPartsCache, 1)
+						end
+					end
+					pcall(function() target:Destroy() end)
+				end
+			end
+		end)
+
+		tool.Parent = backpack
+	end
+end
+
+local function RemoveBToolsTool()
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if backpack then
+		for _, item in ipairs(backpack:GetChildren()) do
+			if item:IsA("Tool") and item.Name == "BTools" then
+				pcall(function() item:Destroy() end)
+			end
+			if item:IsA("HopperBin") and (item.Name == "BTools" or item.BinType == Enum.BinType.Hammer) then
+				pcall(function() item:Destroy() end)
+			end
+		end
+	end
+	local char = player.Character
+	if char then
+		for _, item in ipairs(char:GetChildren()) do
+			if item:IsA("Tool") and item.Name == "BTools" then
+				pcall(function() item:Destroy() end)
+			end
+			if item:IsA("HopperBin") and (item.Name == "BTools" or item.BinType == Enum.BinType.Hammer) then
+				pcall(function() item:Destroy() end)
+			end
+		end
+	end
+end
+
+function Features.SetClickTP(enabled)
+	Config.Extras.ClickTP = enabled
+	if enabled then
+		GiveClickTPTool()
+		if not Runtime.ClickTP.conn then
+			Runtime.ClickTP.conn = player.CharacterAdded:Connect(function()
+				task.wait(0.3)
+				if Config.Extras.ClickTP then
+					GiveClickTPTool()
 				end
 			end)
 		end
+		RATAHUB:Notify({ Title = "Herramienta", Content = "Click TP Activado (Usa la herramienta Click TP)", Duration = 1.5 })
 	else
 		if Runtime.ClickTP.conn then
 			Runtime.ClickTP.conn:Disconnect()
 			Runtime.ClickTP.conn = nil
 		end
+		RemoveClickTPTool()
+		RATAHUB:Notify({ Title = "Herramienta", Content = "Click TP Desactivado", Duration = 1.2 })
+	end
+end
+
+function Features.RestoreDeletedMapParts()
+	local count = 0
+	for i = #DeletedPartsCache, 1, -1 do
+		local data = DeletedPartsCache[i]
+		if data and data.Clone then
+			local s = pcall(function()
+				data.Clone.CFrame = data.CFrame
+				local targetParent = data.OriginalParent
+				if not targetParent or not targetParent.Parent then
+					targetParent = workspace
+				end
+				data.Clone.Parent = targetParent
+			end)
+			if s then count = count + 1 end
+		end
+	end
+	table.clear(DeletedPartsCache)
+	if count > 0 then
+		RATAHUB:Notify({ Title = "BTools", Content = string.format("Se restauraron %d objetos/paredes del mapa", count), Duration = 2 })
+	else
+		RATAHUB:Notify({ Title = "BTools", Content = "No hay objetos para restaurar", Duration = 1.5 })
 	end
 end
 
 function Features.SetBTools(enabled)
+	Config.Extras.BTools = enabled
 	if enabled then
-		local backpack = player:FindFirstChildOfClass("Backpack")
-		if backpack then
-			if not backpack:FindFirstChild("Clone") then
-				local b1 = Instance.new("HopperBin")
-				b1.Name = "Clone"
-				b1.BinType = Enum.BinType.Clone
-				b1.Parent = backpack
-			end
-			if not backpack:FindFirstChild("Hammer") then
-				local b2 = Instance.new("HopperBin")
-				b2.Name = "Hammer"
-				b2.BinType = Enum.BinType.Hammer
-				b2.Parent = backpack
-			end
-			if not backpack:FindFirstChild("Grab") then
-				local b3 = Instance.new("HopperBin")
-				b3.Name = "Grab"
-				b3.BinType = Enum.BinType.Grab
-				b3.Parent = backpack
-			end
+		GiveBToolsTool()
+		if not Runtime.BTools.conn then
+			Runtime.BTools.conn = player.CharacterAdded:Connect(function()
+				task.wait(0.3)
+				if Config.Extras.BTools then
+					GiveBToolsTool()
+				end
+			end)
 		end
+		RATAHUB:Notify({ Title = "Herramienta", Content = "BTools Activado (Equipa BTools para borrar paredes)", Duration = 1.5 })
 	else
-		local backpack = player:FindFirstChildOfClass("Backpack")
-		if backpack then
-			for _, item in ipairs(backpack:GetChildren()) do
-				if item:IsA("HopperBin") and (item.BinType == Enum.BinType.Clone or item.BinType == Enum.BinType.Hammer or item.BinType == Enum.BinType.Grab) then
-					item:Destroy()
-				end
-			end
+		if Runtime.BTools.conn then
+			Runtime.BTools.conn:Disconnect()
+			Runtime.BTools.conn = nil
 		end
-		local char = player.Character
-		if char then
-			for _, item in ipairs(char:GetChildren()) do
-				if item:IsA("HopperBin") and (item.BinType == Enum.BinType.Clone or item.BinType == Enum.BinType.Hammer or item.BinType == Enum.BinType.Grab) then
-					item:Destroy()
-				end
-			end
-		end
+		RemoveBToolsTool()
+		RATAHUB:Notify({ Title = "Herramienta", Content = "BTools Desactivado", Duration = 1.2 })
 	end
 end
 
@@ -3689,21 +4806,40 @@ end
 function Features.StartHotkeys()
 	if Runtime.Hotkeys.conn then return end
 	Runtime.Hotkeys.conn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-		if gameProcessed then return end
-		if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-		local name = input.KeyCode.Name
+		if UserInputService:GetFocusedTextBox() then return end
 
-		if name == Config.Main.Movement.FlyKeybind then
+		local keyName = nil
+		if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown then
+			keyName = input.KeyCode.Name
+		elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
+			keyName = "MouseButton1"
+		elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
+			keyName = "MouseButton2"
+		elseif input.UserInputType == Enum.UserInputType.MouseButton3 then
+			keyName = "MouseButton3"
+		end
+
+		if not keyName then return end
+
+		local function matchesKey(cfgKey)
+			if not cfgKey or cfgKey == "None" or cfgKey == "" then return false end
+			if typeof(cfgKey) == "EnumItem" then
+				return cfgKey.Name == keyName
+			end
+			return tostring(cfgKey) == keyName
+		end
+
+		if matchesKey(Config.Main.Movement.FlyKeybind) then
 			Features.ToggleFlyActive()
-		elseif name == Config.Main.Movement.WalkSpeedKeybind then
+		elseif matchesKey(Config.Main.Movement.WalkSpeedKeybind) then
 			Features.ToggleWalkSpeed()
-		elseif name == Config.Main.Movement.InfiniteJumpKeybind then
+		elseif matchesKey(Config.Main.Movement.InfiniteJumpKeybind) then
 			Features.ToggleInfiniteJumpActive()
-		elseif name == Config.Main.Movement.NoclipKeybind then
+		elseif matchesKey(Config.Main.Movement.NoclipKeybind) then
 			Features.ToggleNoclipActive()
-		elseif name == Config.Aimlock.Keybind then
+		elseif matchesKey(Config.Aimlock.Keybind) then
 			Features.ToggleAimlockLock()
-		elseif name == Config.Triggerbot.Keybind and Config.Triggerbot.Keybind ~= "None" then
+		elseif matchesKey(Config.Triggerbot.Keybind) then
 			Features.ToggleTriggerbotActive()
 		end
 	end)
@@ -4109,6 +5245,7 @@ do
 		Name = "Equipos a Ignorar",
 		Options = IGNORE_TEAMS,
 		CurrentOption = E.IgnoreTeams,
+		MultipleOptions = true,
 		Callback = function(Value)
 			E.IgnoreTeams = Value
 			Features.SyncManager.SyncProperty("ESP", "IgnoreTeams", Value)
@@ -4116,10 +5253,12 @@ do
 		end,
 	})
 	Controls.ESP.FriendCheck = esp:CreateToggle({
-		Name = "Friend Check (Ignorar Amigos)",
+		Name = "Friend Check (Resaltar Amigos en Verde)",
 		CurrentValue = E.FriendCheck,
 		Callback = function(Value)
 			E.FriendCheck = Value
+			if Value then Features.RefreshAllFriends() end
+			Features.SyncManager.SyncProperty("ESP", "FriendCheck", Value)
 			Features.UpdateESP()
 		end,
 	})
@@ -4178,6 +5317,7 @@ do
 		CurrentValue = A.TeamCheck,
 		Callback = function(Value)
 			A.TeamCheck = Value
+			Features.SyncManager.SyncProperty("Aimlock", "TeamCheck", Value)
 		end,
 	})
 
@@ -4195,6 +5335,8 @@ do
 		CurrentValue = A.FriendCheck,
 		Callback = function(Value)
 			A.FriendCheck = Value
+			if Value then Features.RefreshAllFriends() end
+			Features.SyncManager.SyncProperty("Aimlock", "FriendCheck", Value)
 		end,
 	})
 	Controls.Aimlock.UseMaxDistance = aim:CreateToggle({
@@ -4232,22 +5374,7 @@ do
 		end,
 	})
 
-	aim:CreateSection("Visual")
-	Controls.Aimlock.EnemyTracers = aim:CreateToggle({
-		Name = "Enemy Tracers",
-		CurrentValue = A.EnemyTracers,
-		Callback = function(Value)
-			A.EnemyTracers = Value
-		end,
-	})
-	Controls.Aimlock.TracerOrigin = aim:CreateDropdown({
-		Name = "Tracer Origin",
-		Options = { "Mouse", "Center", "Bottom" },
-		CurrentOption = A.TracerOrigin,
-		Callback = function(Value)
-			A.TracerOrigin = Value
-		end,
-	})
+
 
 	aim:CreateSection("Whitelist")
 	Controls.Aimlock.WhitelistMode = aim:CreateDropdown({
@@ -4300,6 +5427,7 @@ do
 		Name = "Equipos a Ignorar",
 		Options = IGNORE_TEAMS,
 		CurrentOption = A.IgnoreTeams,
+		MultipleOptions = true,
 		Callback = function(Value)
 			A.IgnoreTeams = Value
 			Features.SyncManager.SyncProperty("Aimlock", "IgnoreTeams", Value)
@@ -4346,6 +5474,7 @@ do
 		CurrentValue = T.TeamCheck,
 		Callback = function(Value)
 			T.TeamCheck = Value
+			Features.SyncManager.SyncProperty("Triggerbot", "TeamCheck", Value)
 		end,
 	})
 	Controls.Triggerbot.WallCheck = trig:CreateToggle({
@@ -4353,6 +5482,15 @@ do
 		CurrentValue = T.WallCheck,
 		Callback = function(Value)
 			T.WallCheck = Value
+		end,
+	})
+	Controls.Triggerbot.FriendCheck = trig:CreateToggle({
+		Name = "Friend Check (No disparar amigos)",
+		CurrentValue = T.FriendCheck,
+		Callback = function(Value)
+			T.FriendCheck = Value
+			if Value then Features.RefreshAllFriends() end
+			Features.SyncManager.SyncProperty("Triggerbot", "FriendCheck", Value)
 		end,
 	})
 
@@ -4397,33 +5535,13 @@ do
 		Name = "Equipos a Ignorar",
 		Options = IGNORE_TEAMS,
 		CurrentOption = T.IgnoreTeams,
+		MultipleOptions = true,
 		Callback = function(Value)
 			T.IgnoreTeams = Value
 			Features.SyncManager.SyncProperty("Triggerbot", "IgnoreTeams", Value)
 		end,
 	})
-	Controls.Triggerbot.SyncTeamESP = trig:CreateToggle({
-		Name = "Sincronizar con ESP (Equipos)",
-		CurrentValue = T.SyncTeamESP,
-		Callback = function(Value)
-			T.SyncTeamESP = Value
-			if Value then
-				Config.ESP.IgnoreTeams = T.IgnoreTeams
-				if Controls.ESP.IgnoreTeams then Controls.ESP.IgnoreTeams:SetSilent(T.IgnoreTeams) end
-			end
-		end,
-	})
-	Controls.Triggerbot.SyncTeamAimlock = trig:CreateToggle({
-		Name = "Sincronizar con Aimlock (Equipos)",
-		CurrentValue = T.SyncTeamAimlock,
-		Callback = function(Value)
-			T.SyncTeamAimlock = Value
-			if Value then
-				Config.Aimlock.IgnoreTeams = T.IgnoreTeams
-				if Controls.Aimlock.IgnoreTeams then Controls.Aimlock.IgnoreTeams:SetSilent(T.IgnoreTeams) end
-			end
-		end,
-	})
+
 end
 
 --------------------------------------------------------------
@@ -4500,6 +5618,12 @@ do
 		CurrentValue = E.Tools.BTools,
 		Callback = function(Value)
 			Features.SetBTools(Value)
+		end,
+	})
+	Controls.Extras.RestoreMap = extras:CreateButton({
+		Name = "Restaurar Mapa / Objetos Borrados",
+		Callback = function()
+			Features.RestoreDeletedMapParts()
 		end,
 	})
 
@@ -4682,3 +5806,8 @@ return {
 	Controls = Controls,
 	Features = Features,
 }
+
+Loader:SetProgress(0.9)
+Loader:SetStatus("Preparing...")
+
+Loader:Finish()   -- <-- se coloca al final, cuando tu inicialización termino
