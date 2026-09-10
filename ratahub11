@@ -1,6 +1,6 @@
 	--!strict
 	--[[
-		RATAHUB LOADER V5 (versión inline, sin CanvasGrouphola222)
+		RATAHUB LOADER V5 (versión inline, sin CanvasGroupholachatgpt)
 		------------------------------------------------------------
 		Pega este bloque al inicio de tu script.
 		NO es un ModuleScript, NO usa require(), NO retorna nada:
@@ -622,6 +622,7 @@
 fadeTargets[1].Completed:Wait()
 
 -- Destruir el loader primero
+-- Destruir el loader primero
 self:Destroy()
 
 -- Mostrar la GUI principal después de que el loader terminó
@@ -650,6 +651,15 @@ end
 
 if mainGui and mainGui:IsA("ScreenGui") then
     mainGui.Enabled = true
+
+    -- Forzar un frame para que Roblox recalcule el layout
+    task.defer(function()
+        if mainGui and mainGui.Parent then
+            mainGui.Enabled = false
+            task.wait()
+            mainGui.Enabled = true
+        end
+    end)
 end
 			end)
 		end
