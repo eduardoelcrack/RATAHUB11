@@ -424,7 +424,7 @@ table.insert(Loader._connections, guiWatchConnection)
 			TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
 			{ Scale = 1 }
 		)
-
+self
 		table.insert(Loader._entranceTweens, fadeInBackdrop)
 		table.insert(Loader._entranceTweens, fadeInShadow)
 		table.insert(Loader._entranceTweens, scaleIn)
@@ -931,7 +931,7 @@ table.insert(Loader._connections, guiWatchConnection)
 	--=====================================================================
 	-- SHARED SCREENGUI + NOTIFICATION LAYER
 	--=====================================================================
-     local screenGui = create("ScreenGui", {
+local screenGui = create("ScreenGui", {
     Name = "RATAHUBGui",
     ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
