@@ -1,6 +1,6 @@
 	--!strict
 	--[[
-		RATAHUB LOADER V5 (versión inline, sin CanvasGroupholachatgpt)
+		RATAHUB LOADER V5 (versión inline, sin CanvasGroupholachatgpt2)
 		------------------------------------------------------------
 		Pega este bloque al inicio de tu script.
 		NO es un ModuleScript, NO usa require(), NO retorna nada:
