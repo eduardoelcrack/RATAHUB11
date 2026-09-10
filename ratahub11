@@ -1,6 +1,6 @@
 	--!strict
 	--[[
-		RATAHUB LOADER V5 (versión inline, sin CanvasGrouphola2)
+		RATAHUB LOADER V5 (versión inline, sin CanvasGrouphola22)
 		------------------------------------------------------------
 		Pega este bloque al inicio de tu script.
 		NO es un ModuleScript, NO usa require(), NO retorna nada:
